@@ -69,6 +69,7 @@ func NewGatewayHandler(
 				cfg.LLMLogging.URL,
 				cfg.LLMLogging.AgentName,
 				cfg.LLMLogging.TimeoutSeconds,
+				cfg.LLMLogging.APIKey,
 			)
 			llmLoggingEnabled = true
 			log.Printf("LLM logging enabled, URL: %s, agent: %s", cfg.LLMLogging.URL, cfg.LLMLogging.AgentName)

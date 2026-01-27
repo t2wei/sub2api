@@ -100,13 +100,15 @@ type UpdateConfig struct {
 type LLMLoggingConfig struct {
 	// 是否启用 LLM 调用日志记录
 	Enabled bool `mapstructure:"enabled"`
-	// data-service 的 llm_calls API 地址
-	// 例如: "http://localhost:8001/llm_calls"
+	// data-service 的 llm_calls API 地址 (8008 端口)
+	// 例如: "http://localhost:8008/llm_calls"
 	URL string `mapstructure:"url"`
 	// 代理名称，用于标识日志来源
 	AgentName string `mapstructure:"agent_name"`
 	// HTTP 请求超时时间（秒）
 	TimeoutSeconds int `mapstructure:"timeout_seconds"`
+	// 访问 data-service 的 API Key (用于 lambda proxy)
+	APIKey string `mapstructure:"api_key"`
 }
 
 type LinuxDoConnectConfig struct {
@@ -135,13 +137,14 @@ type OxSciOAuthConfig struct {
 	Enabled             bool   `mapstructure:"enabled"`
 	ClientID            string `mapstructure:"client_id"`
 	ClientSecret        string `mapstructure:"client_secret"`
-	AuthorizeURL        string `mapstructure:"authorize_url"`         // BFF 授权页面 URL
-	TokenURL            string `mapstructure:"token_url"`             // data-service Token 端点
-	UserInfoURL         string `mapstructure:"userinfo_url"`          // data-service UserInfo 端点
+	AuthorizeURL        string `mapstructure:"authorize_url"`         // data-service OAuth2 授权页面 (8009 端口)
+	TokenURL            string `mapstructure:"token_url"`             // data-service Token 端点 (8008 端口)
+	UserInfoURL         string `mapstructure:"userinfo_url"`          // data-service UserInfo 端点 (8008 端口)
 	Scopes              string `mapstructure:"scopes"`                // 默认: "openid profile email"
 	RedirectURL         string `mapstructure:"redirect_url"`          // 后端回调地址
 	FrontendRedirectURL string `mapstructure:"frontend_redirect_url"` // 前端接收 token 的路由
 	UsePKCE             bool   `mapstructure:"use_pkce"`              // 是否使用 PKCE（推荐开启）
+	APIKey              string `mapstructure:"api_key"`               // 访问 data-service 的 API Key (用于 lambda proxy)
 }
 
 // TokenRefreshConfig OAuth token自动刷新配置
@@ -782,13 +785,14 @@ func setDefaults() {
 	viper.SetDefault("oxsci_oauth.enabled", false)
 	viper.SetDefault("oxsci_oauth.client_id", "")
 	viper.SetDefault("oxsci_oauth.client_secret", "")
-	viper.SetDefault("oxsci_oauth.authorize_url", "")  // BFF 授权页面，如 https://bff.oxsci.ai/oauth/authorize
-	viper.SetDefault("oxsci_oauth.token_url", "")      // data-service Token 端点，如 http://data-service:8001/oauth/token
-	viper.SetDefault("oxsci_oauth.userinfo_url", "")   // data-service UserInfo 端点，如 http://data-service:8001/oauth/userinfo
+	viper.SetDefault("oxsci_oauth.authorize_url", "")  // data-service OAuth2 授权页面 (8009 端口)
+	viper.SetDefault("oxsci_oauth.token_url", "")      // data-service Token 端点 (8008 端口)
+	viper.SetDefault("oxsci_oauth.userinfo_url", "")   // data-service UserInfo 端点 (8008 端口)
 	viper.SetDefault("oxsci_oauth.scopes", "openid profile email")
 	viper.SetDefault("oxsci_oauth.redirect_url", "")   // 后端回调地址
 	viper.SetDefault("oxsci_oauth.frontend_redirect_url", "/auth/oxsci/callback")
 	viper.SetDefault("oxsci_oauth.use_pkce", true)     // 推荐使用 PKCE
+	viper.SetDefault("oxsci_oauth.api_key", "")        // 访问 data-service 的 API Key (用于 lambda proxy)
 
 	// Database
 	viper.SetDefault("database.host", "localhost")
@@ -953,6 +957,7 @@ func setDefaults() {
 	viper.SetDefault("llm_logging.url", "")
 	viper.SetDefault("llm_logging.agent_name", "sub2api")
 	viper.SetDefault("llm_logging.timeout_seconds", 10)
+	viper.SetDefault("llm_logging.api_key", "") // 访问 data-service 的 API Key (用于 lambda proxy)
 }
 
 func (c *Config) Validate() error {

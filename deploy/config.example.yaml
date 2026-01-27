@@ -618,13 +618,22 @@ update:
 # =============================================================================
 # Records Claude API calls to an external data service for analytics and auditing.
 # 将 Claude API 调用记录到外部数据服务，用于分析和审计。
+#
+# Data-service port: 8008 (REST API)
+#
+# Deployment scenarios:
+#   a. Local development: http://localhost:8008/llm_calls
+#   b. Same ECS: http://data-service-{env}.oxsci.internal:8008/llm_calls
+#   c. Via Lambda proxy: https://lambda-url/data-service-test:8008/llm_calls (requires api_key)
 llm_logging:
   # Enable LLM call logging
   # 启用 LLM 调用日志记录
   enabled: false
-  # URL of the data service llm_calls API endpoint
-  # 数据服务 llm_calls API 端点的 URL
-  # Example: "http://data-service:8001/llm_calls"
+  # URL of the data service llm_calls API endpoint (8008 port)
+  # 数据服务 llm_calls API 端点的 URL (8008 端口)
+  # Examples:
+  #   Local: "http://localhost:8008/llm_calls"
+  #   Same ECS: "http://data-service-test.oxsci.internal:8008/llm_calls"
   url: ""
   # Agent name to identify log source
   # 用于标识日志来源的代理名称
@@ -632,6 +641,11 @@ llm_logging:
   # HTTP request timeout in seconds
   # HTTP 请求超时时间（秒）
   timeout_seconds: 10
+  # API Key for accessing data-service via lambda proxy
+  # 通过 lambda proxy 访问 data-service 时需要的 API Key
+  # Only required when url goes through lambda proxy
+  # 仅当 url 通过 lambda proxy 访问时需要
+  api_key: ""
 
 # =============================================================================
 # OxSci OAuth2 Login (SSO with OxSci ecosystem)
@@ -639,6 +653,15 @@ llm_logging:
 # =============================================================================
 # Enables unified user authentication with OxSci platform.
 # 启用与 OxSci 平台的统一用户认证。
+#
+# Data-service ports:
+#   - 8008: REST API (token, userinfo endpoints)
+#   - 8009: OAuth2 HTML pages (authorize endpoint)
+#
+# Deployment scenarios:
+#   a. Local development: http://localhost:8008 / http://localhost:8009
+#   b. Same ECS: http://data-service-{env}.oxsci.internal:8008 / external URL for 8009
+#   c. Via Lambda proxy: https://lambda-url/data-service-test:8008/... (requires api_key)
 oxsci_oauth:
   # Enable OxSci OAuth2 login
   # 启用 OxSci OAuth2 登录
@@ -649,17 +672,23 @@ oxsci_oauth:
   # OAuth2 client secret (for confidential clients)
   # OAuth2 客户端密钥（机密客户端使用）
   client_secret: ""
-  # Authorization page URL (BFF endpoint)
-  # 授权页面 URL（BFF 端点）
-  # Example: "https://bff.oxsci.ai/oauth/authorize"
+  # Authorization page URL (data-service 8009 port - must be externally accessible)
+  # 授权页面 URL（data-service 8009 端口 - 必须外网可访问）
+  # Examples:
+  #   Local: "http://localhost:8009/oauth/authorize"
+  #   Production: "https://auth.your-domain.com/oauth/authorize"
   authorize_url: ""
-  # Token endpoint URL (data-service)
-  # Token 端点 URL（data-service）
-  # Example: "http://data-service:8001/oauth/token"
+  # Token endpoint URL (data-service 8008 port)
+  # Token 端点 URL（data-service 8008 端口）
+  # Examples:
+  #   Local: "http://localhost:8008/oauth/token"
+  #   Same ECS: "http://data-service-test.oxsci.internal:8008/oauth/token"
   token_url: ""
-  # UserInfo endpoint URL (data-service)
-  # UserInfo 端点 URL（data-service）
-  # Example: "http://data-service:8001/oauth/userinfo"
+  # UserInfo endpoint URL (data-service 8008 port)
+  # UserInfo 端点 URL（data-service 8008 端口）
+  # Examples:
+  #   Local: "http://localhost:8008/oauth/userinfo"
+  #   Same ECS: "http://data-service-test.oxsci.internal:8008/oauth/userinfo"
   userinfo_url: ""
   # OAuth2 scopes (space-separated)
   # OAuth2 权限范围（空格分隔）
@@ -674,3 +703,8 @@ oxsci_oauth:
   # Use PKCE (recommended for public clients)
   # 使用 PKCE（推荐用于公开客户端）
   use_pkce: true
+  # API Key for accessing data-service via lambda proxy
+  # 通过 lambda proxy 访问 data-service 时需要的 API Key
+  # Only required when token_url/userinfo_url goes through lambda proxy
+  # 仅当 token_url/userinfo_url 通过 lambda proxy 访问时需要
+  api_key: ""

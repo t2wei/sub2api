@@ -16,16 +16,18 @@ type LLMLogClient struct {
 	baseURL    string
 	httpClient *http.Client
 	agentName  string
+	apiKey     string // 访问 data-service 的 API Key (用于 lambda proxy)
 }
 
 // NewLLMLogClient creates a new LLM log client.
-func NewLLMLogClient(baseURL, agentName string, timeoutSeconds int) *LLMLogClient {
+func NewLLMLogClient(baseURL, agentName string, timeoutSeconds int, apiKey string) *LLMLogClient {
 	if timeoutSeconds <= 0 {
 		timeoutSeconds = 10
 	}
 	return &LLMLogClient{
 		baseURL:   baseURL,
 		agentName: agentName,
+		apiKey:    apiKey,
 		httpClient: &http.Client{
 			Timeout: time.Duration(timeoutSeconds) * time.Second,
 		},
@@ -71,6 +73,9 @@ func (c *LLMLogClient) CreateCall(ctx context.Context, req *LLMCallCreateRequest
 		return 0, fmt.Errorf("create request: %w", err)
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
+	if c.apiKey != "" {
+		httpReq.Header.Set("X-API-Key", c.apiKey)
+	}
 
 	resp, err := c.httpClient.Do(httpReq)
 	if err != nil {
@@ -104,6 +109,9 @@ func (c *LLMLogClient) UpdateCall(ctx context.Context, id int64, req *LLMCallUpd
 		return fmt.Errorf("create request: %w", err)
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
+	if c.apiKey != "" {
+		httpReq.Header.Set("X-API-Key", c.apiKey)
+	}
 
 	resp, err := c.httpClient.Do(httpReq)
 	if err != nil {

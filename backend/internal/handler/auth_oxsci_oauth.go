@@ -259,6 +259,11 @@ func oxsciExchangeCode(
 		SetContext(ctx).
 		SetHeader("Accept", "application/json")
 
+	// 如果配置了 API Key（用于 lambda proxy 访问），添加到请求头
+	if cfg.APIKey != "" {
+		r.SetHeader("X-API-Key", cfg.APIKey)
+	}
+
 	// OxSci OAuth 使用 client_secret_post 方法
 	if cfg.ClientSecret != "" {
 		form.Set("client_secret", cfg.ClientSecret)
@@ -303,11 +308,17 @@ func oxsciFetchUserInfo(
 		return "", "", "", fmt.Errorf("invalid token for userinfo request: %w", err)
 	}
 
-	resp, err := client.R().
+	r := client.R().
 		SetContext(ctx).
 		SetHeader("Accept", "application/json").
-		SetHeader("Authorization", authorization).
-		Get(cfg.UserInfoURL)
+		SetHeader("Authorization", authorization)
+
+	// 如果配置了 API Key（用于 lambda proxy 访问），添加到请求头
+	if cfg.APIKey != "" {
+		r.SetHeader("X-API-Key", cfg.APIKey)
+	}
+
+	resp, err := r.Get(cfg.UserInfoURL)
 	if err != nil {
 		return "", "", "", fmt.Errorf("request userinfo: %w", err)
 	}
