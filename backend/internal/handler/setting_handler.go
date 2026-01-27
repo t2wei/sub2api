@@ -52,6 +52,7 @@ func (h *SettingHandler) GetPublicSettings(c *gin.Context) {
 		PurchaseSubscriptionURL:     settings.PurchaseSubscriptionURL,
 		LinuxDoOAuthEnabled:         settings.LinuxDoOAuthEnabled,
 		SoraClientEnabled:           settings.SoraClientEnabled,
+		OxSciOAuthEnabled:           settings.OxSciOAuthEnabled, // [OXSCI] OxSci OAuth2 登录
 		Version:                     h.version,
 	})
 }

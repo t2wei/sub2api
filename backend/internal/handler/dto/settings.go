@@ -89,6 +89,7 @@ type PublicSettings struct {
 	PurchaseSubscriptionURL     string `json:"purchase_subscription_url"`
 	LinuxDoOAuthEnabled         bool   `json:"linuxdo_oauth_enabled"`
 	SoraClientEnabled           bool   `json:"sora_client_enabled"`
+	OxSciOAuthEnabled           bool   `json:"oxsci_oauth_enabled"` // [OXSCI] OxSci OAuth2 登录
 	Version                     string `json:"version"`
 }
 

@@ -95,6 +95,7 @@ export interface PublicSettings {
   purchase_subscription_url: string
   linuxdo_oauth_enabled: boolean
   sora_client_enabled: boolean
+  oxsci_oauth_enabled: boolean
   version: string
 }
 
