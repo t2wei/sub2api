@@ -66,6 +66,9 @@ const (
 // LinuxDoConnectSyntheticEmailDomain 是 LinuxDo Connect 用户的合成邮箱后缀（RFC 保留域名）。
 const LinuxDoConnectSyntheticEmailDomain = "@linuxdo-connect.invalid"
 
+// OxSciConnectSyntheticEmailDomain 是 OxSci OAuth 用户的合成邮箱后缀。
+const OxSciConnectSyntheticEmailDomain = "@oxsci-connect.invalid"
+
 // Setting keys
 const (
 	// 注册设置

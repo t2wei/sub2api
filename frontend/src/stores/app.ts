@@ -325,6 +325,7 @@ export const useAppStore = defineStore('app', () => {
         home_content: '',
         hide_ccs_import_button: false,
         linuxdo_oauth_enabled: false,
+        oxsci_oauth_enabled: false,
         version: siteVersion.value
       }
     }

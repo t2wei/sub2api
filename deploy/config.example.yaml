@@ -612,3 +612,45 @@ update:
   # Leave empty for direct connection (recommended for overseas servers)
   # 留空表示直连（适用于海外服务器）
   proxy_url: ""
+
+# =============================================================================
+# OxSci OAuth2 Login (SSO with OxSci ecosystem)
+# OxSci OAuth2 登录（与 OxSci 生态系统集成）
+# =============================================================================
+# Enables unified user authentication with OxSci platform.
+# 启用与 OxSci 平台的统一用户认证。
+oxsci_oauth:
+  # Enable OxSci OAuth2 login
+  # 启用 OxSci OAuth2 登录
+  enabled: false
+  # OAuth2 client ID (registered in data-service)
+  # OAuth2 客户端 ID（在 data-service 中注册）
+  client_id: ""
+  # OAuth2 client secret (for confidential clients)
+  # OAuth2 客户端密钥（机密客户端使用）
+  client_secret: ""
+  # Authorization page URL (BFF endpoint)
+  # 授权页面 URL（BFF 端点）
+  # Example: "https://bff.oxsci.ai/oauth/authorize"
+  authorize_url: ""
+  # Token endpoint URL (data-service)
+  # Token 端点 URL（data-service）
+  # Example: "http://data-service:8001/oauth/token"
+  token_url: ""
+  # UserInfo endpoint URL (data-service)
+  # UserInfo 端点 URL（data-service）
+  # Example: "http://data-service:8001/oauth/userinfo"
+  userinfo_url: ""
+  # OAuth2 scopes (space-separated)
+  # OAuth2 权限范围（空格分隔）
+  scopes: "openid profile email"
+  # Backend callback URL (must be registered with the OAuth2 client)
+  # 后端回调 URL（必须在 OAuth2 客户端中注册）
+  # Example: "https://your-sub2api.com/api/v1/auth/oauth/oxsci/callback"
+  redirect_url: ""
+  # Frontend redirect URL after successful login
+  # 登录成功后前端重定向 URL
+  frontend_redirect_url: "/auth/oxsci/callback"
+  # Use PKCE (recommended for public clients)
+  # 使用 PKCE（推荐用于公开客户端）
+  use_pkce: true

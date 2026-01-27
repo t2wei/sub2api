@@ -42,6 +42,9 @@ func RegisterAuthRoutes(
 		}), h.Auth.ResetPassword)
 		auth.GET("/oauth/linuxdo/start", h.Auth.LinuxDoOAuthStart)
 		auth.GET("/oauth/linuxdo/callback", h.Auth.LinuxDoOAuthCallback)
+		// OxSci OAuth2 登录（与 OxSci 生态系统集成）
+		auth.GET("/oauth/oxsci/start", h.Auth.OxSciOAuthStart)
+		auth.GET("/oauth/oxsci/callback", h.Auth.OxSciOAuthCallback)
 	}
 
 	// 公开设置（无需认证）

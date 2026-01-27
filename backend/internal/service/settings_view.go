@@ -75,6 +75,7 @@ type PublicSettings struct {
 	HomeContent          string
 	HideCcsImportButton  bool
 	LinuxDoOAuthEnabled  bool
+	OxSciOAuthEnabled    bool
 	Version              string
 }
 

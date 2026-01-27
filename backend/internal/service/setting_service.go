@@ -88,6 +88,9 @@ func (s *SettingService) GetPublicSettings(ctx context.Context) (*PublicSettings
 		linuxDoEnabled = s.cfg != nil && s.cfg.LinuxDo.Enabled
 	}
 
+	// OxSci OAuth 仅从配置文件读取（不支持动态配置）
+	oxsciEnabled := s.cfg != nil && s.cfg.OxSci.Enabled
+
 	// Password reset requires email verification to be enabled
 	emailVerifyEnabled := settings[SettingKeyEmailVerifyEnabled] == "true"
 	passwordResetEnabled := emailVerifyEnabled && settings[SettingKeyPasswordResetEnabled] == "true"
@@ -109,6 +112,7 @@ func (s *SettingService) GetPublicSettings(ctx context.Context) (*PublicSettings
 		HomeContent:          settings[SettingKeyHomeContent],
 		HideCcsImportButton:  settings[SettingKeyHideCcsImportButton] == "true",
 		LinuxDoOAuthEnabled:  linuxDoEnabled,
+		OxSciOAuthEnabled:    oxsciEnabled,
 	}, nil
 }
 
@@ -149,6 +153,7 @@ func (s *SettingService) GetPublicSettingsForInjection(ctx context.Context) (any
 		HomeContent          string `json:"home_content,omitempty"`
 		HideCcsImportButton  bool   `json:"hide_ccs_import_button"`
 		LinuxDoOAuthEnabled  bool   `json:"linuxdo_oauth_enabled"`
+		OxSciOAuthEnabled    bool   `json:"oxsci_oauth_enabled"`
 		Version              string `json:"version,omitempty"`
 	}{
 		RegistrationEnabled:  settings.RegistrationEnabled,
@@ -167,6 +172,7 @@ func (s *SettingService) GetPublicSettingsForInjection(ctx context.Context) (any
 		HomeContent:          settings.HomeContent,
 		HideCcsImportButton:  settings.HideCcsImportButton,
 		LinuxDoOAuthEnabled:  settings.LinuxDoOAuthEnabled,
+		OxSciOAuthEnabled:    settings.OxSciOAuthEnabled,
 		Version:              s.version,
 	}, nil
 }

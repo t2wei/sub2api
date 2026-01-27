@@ -267,10 +267,26 @@ export default {
       callbackMissingToken: '登录信息缺失，请返回重试。',
       backToLogin: '返回登录'
     },
+    oxsci: {
+      signIn: '使用 OxSci 账号登录',
+      orContinue: '或使用邮箱密码继续',
+      callbackTitle: '正在完成登录',
+      callbackProcessing: '正在验证登录信息，请稍候...',
+      callbackHint: '如果页面未自动跳转，请返回登录页重试。',
+      callbackMissingToken: '登录信息缺失，请返回重试。',
+      backToLogin: '返回登录'
+    },
     oauth: {
       code: '授权码',
       state: '状态',
-      fullUrl: '完整URL'
+      fullUrl: '完整URL',
+      processing: '正在处理登录...',
+      failed: '登录失败',
+      success: '登录成功',
+      redirecting: '正在跳转到控制台...',
+      backToLogin: '返回登录',
+      noToken: '未收到访问令牌',
+      unknownError: '发生未知错误'
     },
     // 忘记密码
     forgotPassword: '忘记密码？',

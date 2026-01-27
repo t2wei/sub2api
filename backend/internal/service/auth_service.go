@@ -359,7 +359,20 @@ func (s *AuthService) Login(ctx context.Context, email, password string) (string
 //
 // 注意：该函数用于 LinuxDo OAuth 登录场景（不同于上游账号的 OAuth，例如 Claude/OpenAI/Gemini）。
 // 为了满足现有数据库约束（需要密码哈希），新用户会生成随机密码并进行哈希保存。
+//
+// 参数 skipRegCheck: 如果为 true，跳过注册开关检查（用于可信的 OAuth 提供商，如 OxSci）
 func (s *AuthService) LoginOrRegisterOAuth(ctx context.Context, email, username string) (string, *User, error) {
+	return s.loginOrRegisterOAuthInternal(ctx, email, username, false)
+}
+
+// LoginOrRegisterOAuthTrusted 用于可信的 OAuth/SSO 登录（如 OxSci）：
+// 跳过注册开关检查，允许自动创建用户。
+// 这适用于我们完全信任的 OAuth 提供商，即使禁用了普通注册也能自动注册。
+func (s *AuthService) LoginOrRegisterOAuthTrusted(ctx context.Context, email, username string) (string, *User, error) {
+	return s.loginOrRegisterOAuthInternal(ctx, email, username, true)
+}
+
+func (s *AuthService) loginOrRegisterOAuthInternal(ctx context.Context, email, username string, skipRegCheck bool) (string, *User, error) {
 	email = strings.TrimSpace(email)
 	if email == "" || len(email) > 255 {
 		return "", nil, infraerrors.BadRequest("INVALID_EMAIL", "invalid email")
@@ -376,8 +389,9 @@ func (s *AuthService) LoginOrRegisterOAuth(ctx context.Context, email, username 
 	user, err := s.userRepo.GetByEmail(ctx, email)
 	if err != nil {
 		if errors.Is(err, ErrUserNotFound) {
-			// OAuth 首次登录视为注册（fail-close：settingService 未配置时不允许注册）
-			if s.settingService == nil || !s.settingService.IsRegistrationEnabled(ctx) {
+			// OAuth 首次登录视为注册
+			// skipRegCheck=true 时跳过注册开关检查（用于可信的 OAuth 提供商）
+			if !skipRegCheck && (s.settingService == nil || !s.settingService.IsRegistrationEnabled(ctx)) {
 				return "", nil, ErrRegDisabled
 			}
 

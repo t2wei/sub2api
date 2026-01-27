@@ -83,6 +83,7 @@ export interface PublicSettings {
   home_content: string
   hide_ccs_import_button: boolean
   linuxdo_oauth_enabled: boolean
+  oxsci_oauth_enabled: boolean
   version: string
 }
 

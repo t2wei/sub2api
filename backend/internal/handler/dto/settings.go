@@ -73,6 +73,7 @@ type PublicSettings struct {
 	HomeContent          string `json:"home_content"`
 	HideCcsImportButton  bool   `json:"hide_ccs_import_button"`
 	LinuxDoOAuthEnabled  bool   `json:"linuxdo_oauth_enabled"`
+	OxSciOAuthEnabled    bool   `json:"oxsci_oauth_enabled"`
 	Version              string `json:"version"`
 }
 
