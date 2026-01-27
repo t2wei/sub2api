@@ -65,6 +65,7 @@ type Config struct {
 	JWT                     JWTConfig                     `mapstructure:"jwt"`
 	Totp                    TotpConfig                    `mapstructure:"totp"`
 	LinuxDo                 LinuxDoConnectConfig          `mapstructure:"linuxdo_connect"`
+	OxSci                   OxSciOAuthConfig              `mapstructure:"oxsci_oauth"`
 	Default                 DefaultConfig                 `mapstructure:"default"`
 	RateLimit               RateLimitConfig               `mapstructure:"rate_limit"`
 	Pricing                 PricingConfig                 `mapstructure:"pricing"`
@@ -183,6 +184,21 @@ type LinuxDoConnectConfig struct {
 	UserInfoEmailPath    string `mapstructure:"userinfo_email_path"`
 	UserInfoIDPath       string `mapstructure:"userinfo_id_path"`
 	UserInfoUsernamePath string `mapstructure:"userinfo_username_path"`
+}
+
+// OxSciOAuthConfig OxSci OAuth2 登录配置
+// 用于与 OxSci 生态系统集成，实现统一用户认证
+type OxSciOAuthConfig struct {
+	Enabled             bool   `mapstructure:"enabled"`
+	ClientID            string `mapstructure:"client_id"`
+	ClientSecret        string `mapstructure:"client_secret"`
+	AuthorizeURL        string `mapstructure:"authorize_url"`         // BFF 授权页面 URL
+	TokenURL            string `mapstructure:"token_url"`             // data-service Token 端点
+	UserInfoURL         string `mapstructure:"userinfo_url"`          // data-service UserInfo 端点
+	Scopes              string `mapstructure:"scopes"`                // 默认: "openid profile email"
+	RedirectURL         string `mapstructure:"redirect_url"`          // 后端回调地址
+	FrontendRedirectURL string `mapstructure:"frontend_redirect_url"` // 前端接收 token 的路由
+	UsePKCE             bool   `mapstructure:"use_pkce"`              // 是否使用 PKCE（推荐开启）
 }
 
 // TokenRefreshConfig OAuth token自动刷新配置
@@ -1030,6 +1046,14 @@ func load(allowMissingJWTSecret bool) (*Config, error) {
 	cfg.LinuxDo.UserInfoEmailPath = strings.TrimSpace(cfg.LinuxDo.UserInfoEmailPath)
 	cfg.LinuxDo.UserInfoIDPath = strings.TrimSpace(cfg.LinuxDo.UserInfoIDPath)
 	cfg.LinuxDo.UserInfoUsernamePath = strings.TrimSpace(cfg.LinuxDo.UserInfoUsernamePath)
+	cfg.OxSci.ClientID = strings.TrimSpace(cfg.OxSci.ClientID)
+	cfg.OxSci.ClientSecret = strings.TrimSpace(cfg.OxSci.ClientSecret)
+	cfg.OxSci.AuthorizeURL = strings.TrimSpace(cfg.OxSci.AuthorizeURL)
+	cfg.OxSci.TokenURL = strings.TrimSpace(cfg.OxSci.TokenURL)
+	cfg.OxSci.UserInfoURL = strings.TrimSpace(cfg.OxSci.UserInfoURL)
+	cfg.OxSci.Scopes = strings.TrimSpace(cfg.OxSci.Scopes)
+	cfg.OxSci.RedirectURL = strings.TrimSpace(cfg.OxSci.RedirectURL)
+	cfg.OxSci.FrontendRedirectURL = strings.TrimSpace(cfg.OxSci.FrontendRedirectURL)
 	cfg.Dashboard.KeyPrefix = strings.TrimSpace(cfg.Dashboard.KeyPrefix)
 	cfg.CORS.AllowedOrigins = normalizeStringSlice(cfg.CORS.AllowedOrigins)
 	cfg.Security.ResponseHeaders.AdditionalAllowed = normalizeStringSlice(cfg.Security.ResponseHeaders.AdditionalAllowed)
@@ -1199,6 +1223,18 @@ func setDefaults() {
 	viper.SetDefault("linuxdo_connect.userinfo_email_path", "")
 	viper.SetDefault("linuxdo_connect.userinfo_id_path", "")
 	viper.SetDefault("linuxdo_connect.userinfo_username_path", "")
+
+	// OxSci OAuth2 登录（与 OxSci 生态系统集成）
+	viper.SetDefault("oxsci_oauth.enabled", false)
+	viper.SetDefault("oxsci_oauth.client_id", "")
+	viper.SetDefault("oxsci_oauth.client_secret", "")
+	viper.SetDefault("oxsci_oauth.authorize_url", "")  // BFF 授权页面，如 https://bff.oxsci.ai/oauth/authorize
+	viper.SetDefault("oxsci_oauth.token_url", "")      // data-service Token 端点，如 http://data-service:8001/oauth/token
+	viper.SetDefault("oxsci_oauth.userinfo_url", "")   // data-service UserInfo 端点，如 http://data-service:8001/oauth/userinfo
+	viper.SetDefault("oxsci_oauth.scopes", "openid profile email")
+	viper.SetDefault("oxsci_oauth.redirect_url", "")   // 后端回调地址
+	viper.SetDefault("oxsci_oauth.frontend_redirect_url", "/auth/oxsci/callback")
+	viper.SetDefault("oxsci_oauth.use_pkce", true)     // 推荐使用 PKCE
 
 	// Database
 	viper.SetDefault("database.host", "localhost")
@@ -1671,6 +1707,49 @@ func (c *Config) Validate() error {
 		warnIfInsecureURL("linuxdo_connect.userinfo_url", c.LinuxDo.UserInfoURL)
 		warnIfInsecureURL("linuxdo_connect.redirect_url", c.LinuxDo.RedirectURL)
 		warnIfInsecureURL("linuxdo_connect.frontend_redirect_url", c.LinuxDo.FrontendRedirectURL)
+	}
+	// OxSci OAuth2 验证
+	if c.OxSci.Enabled {
+		if c.OxSci.ClientID == "" {
+			return fmt.Errorf("oxsci_oauth.client_id is required when oxsci_oauth.enabled=true")
+		}
+		if c.OxSci.AuthorizeURL == "" {
+			return fmt.Errorf("oxsci_oauth.authorize_url is required when oxsci_oauth.enabled=true")
+		}
+		if c.OxSci.TokenURL == "" {
+			return fmt.Errorf("oxsci_oauth.token_url is required when oxsci_oauth.enabled=true")
+		}
+		if c.OxSci.UserInfoURL == "" {
+			return fmt.Errorf("oxsci_oauth.userinfo_url is required when oxsci_oauth.enabled=true")
+		}
+		if c.OxSci.RedirectURL == "" {
+			return fmt.Errorf("oxsci_oauth.redirect_url is required when oxsci_oauth.enabled=true")
+		}
+		if c.OxSci.FrontendRedirectURL == "" {
+			return fmt.Errorf("oxsci_oauth.frontend_redirect_url is required when oxsci_oauth.enabled=true")
+		}
+		// 非 PKCE 模式需要 client_secret
+		if !c.OxSci.UsePKCE && c.OxSci.ClientSecret == "" {
+			return fmt.Errorf("oxsci_oauth.client_secret is required when oxsci_oauth.enabled=true and use_pkce=false")
+		}
+		if err := ValidateAbsoluteHTTPURL(c.OxSci.AuthorizeURL); err != nil {
+			return fmt.Errorf("oxsci_oauth.authorize_url invalid: %w", err)
+		}
+		if err := ValidateAbsoluteHTTPURL(c.OxSci.TokenURL); err != nil {
+			return fmt.Errorf("oxsci_oauth.token_url invalid: %w", err)
+		}
+		if err := ValidateAbsoluteHTTPURL(c.OxSci.UserInfoURL); err != nil {
+			return fmt.Errorf("oxsci_oauth.userinfo_url invalid: %w", err)
+		}
+		if err := ValidateAbsoluteHTTPURL(c.OxSci.RedirectURL); err != nil {
+			return fmt.Errorf("oxsci_oauth.redirect_url invalid: %w", err)
+		}
+		if err := ValidateFrontendRedirectURL(c.OxSci.FrontendRedirectURL); err != nil {
+			return fmt.Errorf("oxsci_oauth.frontend_redirect_url invalid: %w", err)
+		}
+		warnIfInsecureURL("oxsci_oauth.authorize_url", c.OxSci.AuthorizeURL)
+		warnIfInsecureURL("oxsci_oauth.token_url", c.OxSci.TokenURL)
+		warnIfInsecureURL("oxsci_oauth.userinfo_url", c.OxSci.UserInfoURL)
 	}
 	if c.Billing.CircuitBreaker.Enabled {
 		if c.Billing.CircuitBreaker.FailureThreshold <= 0 {

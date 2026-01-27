@@ -83,6 +83,15 @@ const routes: RouteRecordRaw[] = [
     }
   },
   {
+    path: '/auth/oxsci/callback',
+    name: 'OxSciOAuthCallback',
+    component: () => import('@/views/auth/OxSciCallbackView.vue'),
+    meta: {
+      requiresAuth: false,
+      title: 'OxSci OAuth Callback'
+    }
+  },
+  {
     path: '/forgot-password',
     name: 'ForgotPassword',
     component: () => import('@/views/auth/ForgotPasswordView.vue'),

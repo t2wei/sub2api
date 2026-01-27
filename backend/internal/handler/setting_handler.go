@@ -53,6 +53,7 @@ func (h *SettingHandler) GetPublicSettings(c *gin.Context) {
 		CustomMenuItems:             dto.ParseUserVisibleMenuItems(settings.CustomMenuItems),
 		LinuxDoOAuthEnabled:         settings.LinuxDoOAuthEnabled,
 		SoraClientEnabled:           settings.SoraClientEnabled,
+		OxSciOAuthEnabled:           settings.OxSciOAuthEnabled, // [OXSCI] OxSci OAuth2 登录
 		Version:                     h.version,
 	})
 }

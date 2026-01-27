@@ -141,6 +141,9 @@ func (s *SettingService) GetPublicSettings(ctx context.Context) (*PublicSettings
 		linuxDoEnabled = s.cfg != nil && s.cfg.LinuxDo.Enabled
 	}
 
+	// OxSci OAuth 仅从配置文件读取（不支持动态配置）
+	oxsciEnabled := s.cfg != nil && s.cfg.OxSci.Enabled
+
 	// Password reset requires email verification to be enabled
 	emailVerifyEnabled := settings[SettingKeyEmailVerifyEnabled] == "true"
 	passwordResetEnabled := emailVerifyEnabled && settings[SettingKeyPasswordResetEnabled] == "true"
@@ -167,6 +170,7 @@ func (s *SettingService) GetPublicSettings(ctx context.Context) (*PublicSettings
 		SoraClientEnabled:           settings[SettingKeySoraClientEnabled] == "true",
 		CustomMenuItems:             settings[SettingKeyCustomMenuItems],
 		LinuxDoOAuthEnabled:         linuxDoEnabled,
+		OxSciOAuthEnabled:           oxsciEnabled, // [OXSCI] OxSci OAuth2 登录
 	}, nil
 }
 
@@ -217,6 +221,7 @@ func (s *SettingService) GetPublicSettingsForInjection(ctx context.Context) (any
 		SoraClientEnabled           bool            `json:"sora_client_enabled"`
 		CustomMenuItems             json.RawMessage `json:"custom_menu_items"`
 		LinuxDoOAuthEnabled         bool            `json:"linuxdo_oauth_enabled"`
+		OxSciOAuthEnabled           bool            `json:"oxsci_oauth_enabled"` // [OXSCI] OxSci OAuth2 登录
 		Version                     string          `json:"version,omitempty"`
 	}{
 		RegistrationEnabled:         settings.RegistrationEnabled,
@@ -240,6 +245,7 @@ func (s *SettingService) GetPublicSettingsForInjection(ctx context.Context) (any
 		SoraClientEnabled:           settings.SoraClientEnabled,
 		CustomMenuItems:             filterUserVisibleMenuItems(settings.CustomMenuItems),
 		LinuxDoOAuthEnabled:         settings.LinuxDoOAuthEnabled,
+		OxSciOAuthEnabled:           settings.OxSciOAuthEnabled, // [OXSCI] OxSci OAuth2 登录
 		Version:                     s.version,
 	}, nil
 }
