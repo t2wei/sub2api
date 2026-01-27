@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/client"
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/antigravity"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/claude"
@@ -33,6 +34,8 @@ type GatewayHandler struct {
 	concurrencyHelper         *ConcurrencyHelper
 	maxAccountSwitches        int
 	maxAccountSwitchesGemini  int
+	llmLogClient              *client.LLMLogClient // LLM 调用日志客户端（可选）
+	llmLoggingEnabled         bool                 // 是否启用 LLM 调用日志
 }
 
 // NewGatewayHandler creates a new GatewayHandler
@@ -48,6 +51,9 @@ func NewGatewayHandler(
 	pingInterval := time.Duration(0)
 	maxAccountSwitches := 10
 	maxAccountSwitchesGemini := 3
+	var llmLogClient *client.LLMLogClient
+	llmLoggingEnabled := false
+
 	if cfg != nil {
 		pingInterval = time.Duration(cfg.Concurrency.PingInterval) * time.Second
 		if cfg.Gateway.MaxAccountSwitches > 0 {
@@ -55,6 +61,17 @@ func NewGatewayHandler(
 		}
 		if cfg.Gateway.MaxAccountSwitchesGemini > 0 {
 			maxAccountSwitchesGemini = cfg.Gateway.MaxAccountSwitchesGemini
+		}
+
+		// 初始化 LLM 日志客户端
+		if cfg.LLMLogging.Enabled && cfg.LLMLogging.URL != "" {
+			llmLogClient = client.NewLLMLogClient(
+				cfg.LLMLogging.URL,
+				cfg.LLMLogging.AgentName,
+				cfg.LLMLogging.TimeoutSeconds,
+			)
+			llmLoggingEnabled = true
+			log.Printf("LLM logging enabled, URL: %s, agent: %s", cfg.LLMLogging.URL, cfg.LLMLogging.AgentName)
 		}
 	}
 	return &GatewayHandler{
@@ -66,6 +83,8 @@ func NewGatewayHandler(
 		concurrencyHelper:         NewConcurrencyHelper(concurrencyService, SSEPingFormatClaude, pingInterval),
 		maxAccountSwitches:        maxAccountSwitches,
 		maxAccountSwitchesGemini:  maxAccountSwitchesGemini,
+		llmLogClient:              llmLogClient,
+		llmLoggingEnabled:         llmLoggingEnabled,
 	}
 }
 
@@ -120,6 +139,17 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 	if reqModel == "" {
 		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "model is required")
 		return
+	}
+
+	// 创建 LLM 调用日志（异步，非阻塞）
+	// 仅在非 Gemini 平台时记录（Claude API）
+	var llmLogID int64
+	platform := ""
+	if apiKey.Group != nil {
+		platform = apiKey.Group.Platform
+	}
+	if platform != service.PlatformGemini {
+		llmLogID = h.createLLMCallLog(c.Request.Context(), body)
 	}
 
 	// Track if we've started streaming (for error handling)
@@ -179,11 +209,9 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 	sessionHash := h.gatewayService.GenerateSessionHash(parsedReq)
 
 	// 获取平台：优先使用强制平台（/antigravity 路由，中间件已设置 request.Context），否则使用分组平台
-	platform := ""
+	// platform 已在前面定义，这里只更新值
 	if forcePlatform, ok := middleware2.GetForcePlatformFromContext(c); ok {
 		platform = forcePlatform
-	} else if apiKey.Group != nil {
-		platform = apiKey.Group.Platform
 	}
 	sessionKey := sessionHash
 	if platform == service.PlatformGemini && sessionHash != "" {
@@ -429,6 +457,11 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 				lastFailoverStatus = failoverErr.StatusCode
 				if switchCount >= maxAccountSwitches {
 					h.handleFailoverExhausted(c, lastFailoverStatus, streamStarted)
+					// 更新 LLM 调用日志（失败）
+					if llmLogID > 0 {
+						errMsg := fmt.Sprintf("failover exhausted, last status: %d", lastFailoverStatus)
+						go h.updateLLMCallLog(context.Background(), llmLogID, nil, &errMsg, account.ID, apiKey.ID, apiKey.User.ID)
+					}
 					return
 				}
 				switchCount++
@@ -437,6 +470,11 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 			}
 			// 错误响应已在Forward中处理，这里只记录日志
 			log.Printf("Account %d: Forward request failed: %v", account.ID, err)
+			// 更新 LLM 调用日志（失败）
+			if llmLogID > 0 {
+				errMsg := err.Error()
+				go h.updateLLMCallLog(context.Background(), llmLogID, nil, &errMsg, account.ID, apiKey.ID, apiKey.User.ID)
+			}
 			return
 		}
 
@@ -444,8 +482,8 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 		userAgent := c.GetHeader("User-Agent")
 		clientIP := ip.GetClientIP(c)
 
-		// 异步记录使用量（subscription已在函数开头获取）
-		go func(result *service.ForwardResult, usedAccount *service.Account, ua, clientIP string) {
+		// 异步记录使用量和 LLM 调用日志（subscription已在函数开头获取）
+		go func(result *service.ForwardResult, usedAccount *service.Account, ua, clientIP string, logID int64) {
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
 			if err := h.gatewayService.RecordUsage(ctx, &service.RecordUsageInput{
@@ -459,7 +497,12 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 			}); err != nil {
 				log.Printf("Record usage failed: %v", err)
 			}
-		}(result, account, userAgent, clientIP)
+
+			// 更新 LLM 调用日志
+			if logID > 0 {
+				h.updateLLMCallLog(ctx, logID, result, nil, usedAccount.ID, apiKey.ID, apiKey.User.ID)
+			}
+		}(result, account, userAgent, clientIP, llmLogID)
 		return
 	}
 }
@@ -974,4 +1017,77 @@ func billingErrorDetails(err error) (status int, code, message string) {
 		msg = err.Error()
 	}
 	return http.StatusForbidden, "billing_error", msg
+}
+
+// createLLMCallLog creates an LLM call log entry (async, non-blocking).
+// Returns the log ID if successful, 0 otherwise.
+func (h *GatewayHandler) createLLMCallLog(ctx context.Context, body []byte) int64 {
+	if !h.llmLoggingEnabled || h.llmLogClient == nil {
+		return 0
+	}
+
+	req, err := client.ConvertClaudeToLLMCallRequest(body, "")
+	if err != nil {
+		log.Printf("Failed to convert Claude request for LLM logging: %v", err)
+		return 0
+	}
+
+	id, err := h.llmLogClient.CreateCall(ctx, req)
+	if err != nil {
+		log.Printf("Failed to create LLM call log: %v", err)
+		return 0
+	}
+
+	return id
+}
+
+// updateLLMCallLog updates an LLM call log entry (async, non-blocking).
+func (h *GatewayHandler) updateLLMCallLog(
+	ctx context.Context,
+	logID int64,
+	result *service.ForwardResult,
+	errMsg *string,
+	accountID int64,
+	apiKeyID int64,
+	userID int64,
+) {
+	if !h.llmLoggingEnabled || h.llmLogClient == nil || logID == 0 {
+		return
+	}
+
+	status := "success"
+	if errMsg != nil {
+		status = "failed"
+	}
+
+	var usage *client.ClaudeUsageForLog
+	if result != nil {
+		usage = &client.ClaudeUsageForLog{
+			InputTokens:              result.Usage.InputTokens,
+			OutputTokens:             result.Usage.OutputTokens,
+			CacheCreationInputTokens: result.Usage.CacheCreationInputTokens,
+			CacheReadInputTokens:     result.Usage.CacheReadInputTokens,
+		}
+	}
+
+	var durationMs int64
+	if result != nil {
+		durationMs = result.Duration.Milliseconds()
+	}
+
+	updateReq := client.BuildLLMCallUpdateFromResult(
+		status,
+		errMsg,
+		"", // responseText not captured in current flow
+		usage,
+		durationMs,
+		result.FirstTokenMs,
+		accountID,
+		apiKeyID,
+		userID,
+	)
+
+	if err := h.llmLogClient.UpdateCall(ctx, logID, updateReq); err != nil {
+		log.Printf("Failed to update LLM call log %d: %v", logID, err)
+	}
 }

@@ -64,6 +64,7 @@ type Config struct {
 	Timezone     string                     `mapstructure:"timezone"` // e.g. "Asia/Shanghai", "UTC"
 	Gemini       GeminiConfig               `mapstructure:"gemini"`
 	Update       UpdateConfig               `mapstructure:"update"`
+	LLMLogging   LLMLoggingConfig           `mapstructure:"llm_logging"`
 }
 
 type GeminiConfig struct {
@@ -93,6 +94,19 @@ type UpdateConfig struct {
 	// 支持 http/https/socks5/socks5h 协议
 	// 例如: "http://127.0.0.1:7890", "socks5://127.0.0.1:1080"
 	ProxyURL string `mapstructure:"proxy_url"`
+}
+
+// LLMLoggingConfig LLM 调用日志配置（记录到 data-service）
+type LLMLoggingConfig struct {
+	// 是否启用 LLM 调用日志记录
+	Enabled bool `mapstructure:"enabled"`
+	// data-service 的 llm_calls API 地址
+	// 例如: "http://localhost:8001/llm_calls"
+	URL string `mapstructure:"url"`
+	// 代理名称，用于标识日志来源
+	AgentName string `mapstructure:"agent_name"`
+	// HTTP 请求超时时间（秒）
+	TimeoutSeconds int `mapstructure:"timeout_seconds"`
 }
 
 type LinuxDoConnectConfig struct {
@@ -933,6 +947,12 @@ func setDefaults() {
 	viper.SetDefault("gemini.oauth.client_secret", "")
 	viper.SetDefault("gemini.oauth.scopes", "")
 	viper.SetDefault("gemini.quota.policy", "")
+
+	// LLM Logging 默认配置
+	viper.SetDefault("llm_logging.enabled", false)
+	viper.SetDefault("llm_logging.url", "")
+	viper.SetDefault("llm_logging.agent_name", "sub2api")
+	viper.SetDefault("llm_logging.timeout_seconds", 10)
 }
 
 func (c *Config) Validate() error {

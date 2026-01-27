@@ -614,6 +614,26 @@ update:
   proxy_url: ""
 
 # =============================================================================
+# LLM Logging Configuration (LLM 调用日志配置)
+# =============================================================================
+# Records Claude API calls to an external data service for analytics and auditing.
+# 将 Claude API 调用记录到外部数据服务，用于分析和审计。
+llm_logging:
+  # Enable LLM call logging
+  # 启用 LLM 调用日志记录
+  enabled: false
+  # URL of the data service llm_calls API endpoint
+  # 数据服务 llm_calls API 端点的 URL
+  # Example: "http://data-service:8001/llm_calls"
+  url: ""
+  # Agent name to identify log source
+  # 用于标识日志来源的代理名称
+  agent_name: "sub2api"
+  # HTTP request timeout in seconds
+  # HTTP 请求超时时间（秒）
+  timeout_seconds: 10
+
+# =============================================================================
 # OxSci OAuth2 Login (SSO with OxSci ecosystem)
 # OxSci OAuth2 登录（与 OxSci 生态系统集成）
 # =============================================================================
