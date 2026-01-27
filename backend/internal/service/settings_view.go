@@ -112,6 +112,7 @@ type PublicSettings struct {
 
 	LinuxDoOAuthEnabled bool
 	BackendModeEnabled  bool
+	OxSciOAuthEnabled   bool // [OXSCI] OxSci OAuth2 登录
 	Version             string
 }
 

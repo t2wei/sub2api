@@ -442,10 +442,26 @@ export default {
       completing: 'Completing registration…',
       completeRegistrationFailed: 'Registration failed. Please check your invitation code and try again.'
     },
+    oxsci: {
+      signIn: 'Continue with OxSci',
+      orContinue: 'or continue with email',
+      callbackTitle: 'Signing you in',
+      callbackProcessing: 'Completing login, please wait...',
+      callbackHint: 'If you are not redirected automatically, go back to the login page and try again.',
+      callbackMissingToken: 'Missing login token, please try again.',
+      backToLogin: 'Back to Login'
+    },
     oauth: {
       code: 'Code',
       state: 'State',
-      fullUrl: 'Full URL'
+      fullUrl: 'Full URL',
+      processing: 'Processing login...',
+      failed: 'Login Failed',
+      success: 'Login Successful',
+      redirecting: 'Redirecting to dashboard...',
+      backToLogin: 'Back to Login',
+      noToken: 'No access token received',
+      unknownError: 'An unknown error occurred'
     },
     // Forgot password
     forgotPassword: 'Forgot password?',

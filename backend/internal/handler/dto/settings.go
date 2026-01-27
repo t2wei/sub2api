@@ -129,6 +129,7 @@ type PublicSettings struct {
 	CustomEndpoints                  []CustomEndpoint `json:"custom_endpoints"`
 	LinuxDoOAuthEnabled              bool             `json:"linuxdo_oauth_enabled"`
 	BackendModeEnabled               bool             `json:"backend_mode_enabled"`
+	OxSciOAuthEnabled                bool             `json:"oxsci_oauth_enabled"` // [OXSCI] OxSci OAuth2 登录
 	Version                          string           `json:"version"`
 }
 

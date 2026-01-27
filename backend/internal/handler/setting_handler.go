@@ -55,6 +55,7 @@ func (h *SettingHandler) GetPublicSettings(c *gin.Context) {
 		CustomEndpoints:                  dto.ParseCustomEndpoints(settings.CustomEndpoints),
 		LinuxDoOAuthEnabled:              settings.LinuxDoOAuthEnabled,
 		BackendModeEnabled:               settings.BackendModeEnabled,
+		OxSciOAuthEnabled:                settings.OxSciOAuthEnabled, // [OXSCI] OxSci OAuth2 登录
 		Version:                          h.version,
 	})
 }
