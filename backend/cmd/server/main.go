@@ -64,6 +64,29 @@ func main() {
 	// Initialize slog logger based on gin mode
 	initLogger()
 
+	// Override log level with SUB2API_LOG_LEVEL environment variable if set
+	// Use SUB2API_LOG_LEVEL to avoid conflicts when deployed alongside data-service
+	if logLevelEnv := strings.ToUpper(os.Getenv("SUB2API_LOG_LEVEL")); logLevelEnv != "" {
+		var level slog.Level
+		switch logLevelEnv {
+		case "DEBUG":
+			level = slog.LevelDebug
+		case "INFO":
+			level = slog.LevelInfo
+		case "WARN", "WARNING":
+			level = slog.LevelWarn
+		case "ERROR":
+			level = slog.LevelError
+		default:
+			log.Printf("Warning: Invalid SUB2API_LOG_LEVEL '%s', ignoring", logLevelEnv)
+			goto skipLogLevelOverride
+		}
+		handler := slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level})
+		slog.SetDefault(slog.New(handler))
+		slog.Info("Log level overridden by environment variable", "level", level.String())
+	}
+skipLogLevelOverride:
+
 	// Parse command line flags
 	setupMode := flag.Bool("setup", false, "Run setup wizard in CLI mode")
 	showVersion := flag.Bool("version", false, "Show version information")
