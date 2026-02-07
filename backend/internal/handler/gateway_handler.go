@@ -12,6 +12,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/client" // [OXSCI] for LLM Log Client
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/domain"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/antigravity"
@@ -49,6 +50,7 @@ type GatewayHandler struct {
 	maxAccountSwitchesGemini  int
 	cfg                       *config.Config
 	settingService            *service.SettingService
+	lifecycleHook             RequestLifecycleHook // [OXSCI] 请求生命周期钩子（扩展点）
 }
 
 // NewGatewayHandler creates a new GatewayHandler
@@ -69,6 +71,7 @@ func NewGatewayHandler(
 	pingInterval := time.Duration(0)
 	maxAccountSwitches := 10
 	maxAccountSwitchesGemini := 3
+
 	if cfg != nil {
 		pingInterval = time.Duration(cfg.Concurrency.PingInterval) * time.Second
 		if cfg.Gateway.MaxAccountSwitches > 0 {
@@ -78,6 +81,22 @@ func NewGatewayHandler(
 			maxAccountSwitchesGemini = cfg.Gateway.MaxAccountSwitchesGemini
 		}
 	}
+
+	// [OXSCI] 初始化生命周期钩子（基于配置组合多个钩子）
+	var hooks []RequestLifecycleHook
+
+	// LLM日志钩子（如果启用）
+	if cfg != nil && cfg.LLMLogging.Enabled && cfg.LLMLogging.URL != "" {
+		llmLogClient := client.NewLLMLogClient(cfg.LLMLogging)
+		hooks = append(hooks, NewLLMLoggingHook(llmLogClient, true))
+	}
+
+	// 使用CompositeHook组合，或使用NoOpHook作为默认
+	var lifecycleHook RequestLifecycleHook = &NoOpHook{}
+	if len(hooks) > 0 {
+		lifecycleHook = NewCompositeHook(hooks...)
+	}
+
 	return &GatewayHandler{
 		gatewayService:            gatewayService,
 		geminiCompatService:       geminiCompatService,
@@ -93,6 +112,7 @@ func NewGatewayHandler(
 		maxAccountSwitchesGemini:  maxAccountSwitchesGemini,
 		cfg:                       cfg,
 		settingService:            settingService,
+		lifecycleHook:             lifecycleHook, // [OXSCI]
 	}
 }
 

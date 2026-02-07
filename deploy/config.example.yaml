@@ -1028,3 +1028,30 @@ oxsci_oauth:
   # Use PKCE (recommended for public clients)
   # 使用 PKCE（推荐用于公开客户端）
   use_pkce: true
+  # [OXSCI] API Key for accessing services via Lambda Proxy
+  # [OXSCI] 通过 Lambda Proxy 访问服务的 API Key
+  api_key: ""
+
+# =============================================================================
+# [OXSCI] LLM Logging Configuration
+# [OXSCI] LLM 调用日志配置
+# =============================================================================
+# Enable logging of LLM calls to data-service for monitoring and analytics.
+# 启用 LLM 调用日志记录，用于监控和分析。
+llm_logging:
+  # Enable LLM call logging
+  # 启用 LLM 调用日志记录
+  enabled: false
+  # data-service LLM logging API endpoint
+  # data-service LLM 日志 API 端点
+  # Example: "http://data-service:8001/api/v1/llm-calls"
+  url: ""
+  # Agent name for identifying the log source
+  # 代理名称（用于标识日志来源）
+  agent_name: "sub2api"
+  # [OXSCI] API Key for accessing services via Lambda Proxy
+  # [OXSCI] 通过 Lambda Proxy 访问服务的 API Key
+  api_key: ""
+  # HTTP request timeout in seconds
+  # HTTP 请求超时时间（秒）
+  timeout_seconds: 10
