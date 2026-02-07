@@ -84,6 +84,7 @@ type Config struct {
 	Gemini                  GeminiConfig                  `mapstructure:"gemini"`
 	Update                  UpdateConfig                  `mapstructure:"update"`
 	Idempotency             IdempotencyConfig             `mapstructure:"idempotency"`
+	LLMLogging              LLMLoggingConfig              `mapstructure:"llm_logging"` // [OXSCI] LLM 调用日志配置
 }
 
 type LogConfig struct {
@@ -199,6 +200,17 @@ type OxSciOAuthConfig struct {
 	RedirectURL         string `mapstructure:"redirect_url"`          // 后端回调地址
 	FrontendRedirectURL string `mapstructure:"frontend_redirect_url"` // 前端接收 token 的路由
 	UsePKCE             bool   `mapstructure:"use_pkce"`              // 是否使用 PKCE（推荐开启）
+	APIKey              string `mapstructure:"api_key"`               // [OXSCI] API Key for Lambda Proxy access
+}
+
+// LLMLoggingConfig LLM 调用日志配置
+// [OXSCI] 用于记录 LLM 调用日志到 data-service
+type LLMLoggingConfig struct {
+	Enabled        bool   `mapstructure:"enabled"`         // 是否启用 LLM 日志记录
+	URL            string `mapstructure:"url"`             // data-service LLM 日志 API 地址
+	AgentName      string `mapstructure:"agent_name"`      // 代理名称（用于标识日志来源）
+	APIKey         string `mapstructure:"api_key"`         // [OXSCI] API Key for Lambda Proxy access
+	TimeoutSeconds int    `mapstructure:"timeout_seconds"` // HTTP 请求超时时间（秒）
 }
 
 // TokenRefreshConfig OAuth token自动刷新配置
