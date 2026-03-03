@@ -27,7 +27,9 @@ const openaiModels = [
   // GPT-5.3 系列
   'gpt-5.3-codex', 'gpt-5.3-codex-spark',
   'chatgpt-4o-latest',
-  'gpt-4o-audio-preview', 'gpt-4o-realtime-preview'
+  'gpt-4o-audio-preview', 'gpt-4o-realtime-preview',
+  // Embedding models
+  'text-embedding-3-small', 'text-embedding-3-large', 'text-embedding-ada-002'
 ]
 
 // Anthropic Claude
@@ -53,7 +55,10 @@ const geminiModels = [
   'gemini-2.5-flash',
   'gemini-2.5-pro',
   'gemini-3-flash-preview',
-  'gemini-3-pro-preview'
+  'gemini-3-pro-preview',
+  // Embedding models
+  'text-embedding-004',
+  'embedding-001'
 ]
 
 // Sora
