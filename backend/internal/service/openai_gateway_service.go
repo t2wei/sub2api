@@ -3859,3 +3859,99 @@ func normalizeOpenAIReasoningEffort(raw string) string {
 		return ""
 	}
 }
+
+// ForwardEmbeddings forwards an OpenAI /v1/embeddings request to the upstream OpenAI API.
+// It returns an OpenAIForwardResult with usage information for billing.
+func (s *OpenAIGatewayService) ForwardEmbeddings(ctx context.Context, c *gin.Context, account *Account, body []byte) (*OpenAIForwardResult, error) {
+	startTime := time.Now()
+
+	token, _, err := s.GetAccessToken(ctx, account)
+	if err != nil {
+		return nil, &UpstreamFailoverError{
+			StatusCode:   http.StatusUnauthorized,
+			ResponseBody: []byte(`{"error": "Failed to get access token"}`),
+		}
+	}
+
+	// Build upstream URL
+	baseURL := account.GetOpenAIBaseURL()
+	fullURL := strings.TrimRight(baseURL, "/") + "/v1/embeddings"
+
+	upstreamReq, err := http.NewRequestWithContext(ctx, http.MethodPost, fullURL, bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create upstream request: %w", err)
+	}
+	upstreamReq.Header.Set("Content-Type", "application/json")
+	upstreamReq.Header.Set("Authorization", "Bearer "+token)
+
+	proxyURL := ""
+	if account.ProxyID != nil && account.Proxy != nil {
+		proxyURL = account.Proxy.URL()
+	}
+
+	resp, err := s.httpUpstream.Do(upstreamReq, proxyURL, account.ID, account.Concurrency)
+	if err != nil {
+		return nil, &UpstreamFailoverError{
+			StatusCode:   http.StatusBadGateway,
+			ResponseBody: []byte(`{"error": "Upstream request failed"}`),
+		}
+	}
+	defer resp.Body.Close()
+
+	// Check for upstream errors that should trigger failover
+	if resp.StatusCode >= 400 {
+		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
+		if s.shouldFailoverUpstreamError(resp.StatusCode) {
+			return nil, &UpstreamFailoverError{
+				StatusCode:   resp.StatusCode,
+				ResponseBody: respBody,
+			}
+		}
+		// Non-failover error: pass through to client
+		contentType := resp.Header.Get("Content-Type")
+		if contentType == "" {
+			contentType = "application/json"
+		}
+		c.Data(resp.StatusCode, contentType, respBody)
+		return nil, fmt.Errorf("upstream error: %d", resp.StatusCode)
+	}
+
+	// Read successful response
+	maxBytes := resolveUpstreamResponseReadLimit(s.cfg)
+	respBody, err := readUpstreamResponseBodyLimited(resp.Body, maxBytes)
+	if err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{
+			"error": gin.H{"type": "upstream_error", "message": "Failed to read upstream response"},
+		})
+		return nil, err
+	}
+
+	// Extract usage from OpenAI embedding response
+	// Format: {"usage": {"prompt_tokens": N, "total_tokens": N}}
+	promptTokens := int(gjson.GetBytes(respBody, "usage.prompt_tokens").Int())
+	totalTokens := int(gjson.GetBytes(respBody, "usage.total_tokens").Int())
+	respModel := gjson.GetBytes(respBody, "model").String()
+
+	// Write response headers and body to client
+	responseheaders.WriteFilteredHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)
+	contentType := resp.Header.Get("Content-Type")
+	if contentType == "" {
+		contentType = "application/json"
+	}
+	c.Data(resp.StatusCode, contentType, respBody)
+
+	duration := time.Since(startTime)
+	_ = totalTokens // totalTokens captured in usage for completeness
+
+	return &OpenAIForwardResult{
+		RequestID: resp.Header.Get("x-request-id"),
+		Usage: OpenAIUsage{
+			InputTokens:  promptTokens,
+			OutputTokens: 0,
+		},
+		Model:    respModel,
+		Stream:   false,
+		Duration: duration,
+	}, nil
+}
+
