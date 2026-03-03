@@ -57,6 +57,7 @@ const geminiModels = [
   'gemini-3-flash-preview',
   'gemini-3-pro-preview',
   // Embedding models
+  'gemini-embedding-001',
   'text-embedding-004',
   'embedding-001'
 ]

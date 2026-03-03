@@ -27,6 +27,7 @@ func DefaultModels() []Model {
 		{Name: "models/gemini-3-flash-preview", SupportedGenerationMethods: chatMethods},
 		{Name: "models/gemini-3-pro-preview", SupportedGenerationMethods: chatMethods},
 		{Name: "models/gemini-3.1-pro-preview", SupportedGenerationMethods: chatMethods},
+		{Name: "models/gemini-embedding-001", SupportedGenerationMethods: embeddingMethods},
 		{Name: "models/text-embedding-004", SupportedGenerationMethods: embeddingMethods},
 		{Name: "models/embedding-001", SupportedGenerationMethods: embeddingMethods},
 	}
