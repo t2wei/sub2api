@@ -27,7 +27,6 @@ import (
 // OpenAIGatewayHandler handles OpenAI API gateway requests
 type OpenAIGatewayHandler struct {
 	gatewayService          *service.OpenAIGatewayService
-	geminiCompatService     *service.GeminiMessagesCompatService
 	billingCacheService     *service.BillingCacheService
 	apiKeyService           *service.APIKeyService
 	usageRecordWorkerPool   *service.UsageRecordWorkerPool
@@ -39,7 +38,6 @@ type OpenAIGatewayHandler struct {
 // NewOpenAIGatewayHandler creates a new OpenAIGatewayHandler
 func NewOpenAIGatewayHandler(
 	gatewayService *service.OpenAIGatewayService,
-	geminiCompatService *service.GeminiMessagesCompatService,
 	concurrencyService *service.ConcurrencyService,
 	billingCacheService *service.BillingCacheService,
 	apiKeyService *service.APIKeyService,
@@ -57,7 +55,6 @@ func NewOpenAIGatewayHandler(
 	}
 	return &OpenAIGatewayHandler{
 		gatewayService:          gatewayService,
-		geminiCompatService:     geminiCompatService,
 		billingCacheService:     billingCacheService,
 		apiKeyService:           apiKeyService,
 		usageRecordWorkerPool:   usageRecordWorkerPool,
@@ -1075,34 +1072,21 @@ func summarizeWSCloseErrorForLog(err error) (string, string) {
 	return closeStatus, closeReason
 }
 
-// Embeddings handles OpenAI-compatible embedding requests
-// POST /v1/embeddings
-// Routes to the appropriate upstream based on group platform:
-//   - platform=openai  → passthrough to api.openai.com/v1/embeddings
-//   - platform=gemini  → convert to Gemini embedContent format and forward
+// Embeddings handles OpenAI /v1/embeddings endpoint.
+// Like /v1/responses, account selection and upstream routing is handled by the service layer.
 func (h *OpenAIGatewayHandler) Embeddings(c *gin.Context) {
-	// Get apiKey and user from context (set by ApiKeyAuth middleware)
 	apiKey, ok := middleware2.GetAPIKeyFromContext(c)
 	if !ok || apiKey == nil {
 		h.errorResponse(c, http.StatusUnauthorized, "invalid_api_key", "Invalid API Key")
 		return
 	}
 
-	if apiKey.Group == nil {
-		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "API key has no associated group")
-		return
-	}
-
-	platform := apiKey.Group.Platform
-
-	// Read request body
 	body, err := pkghttputil.ReadRequestBodyWithPrealloc(c.Request)
 	if err != nil {
 		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "Failed to read request body")
 		return
 	}
 
-	// Extract model from request
 	reqModel := gjson.GetBytes(body, "model").String()
 	if reqModel == "" {
 		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "model is required")
@@ -1111,7 +1095,6 @@ func (h *OpenAIGatewayHandler) Embeddings(c *gin.Context) {
 
 	subscription, _ := middleware2.GetSubscriptionFromContext(c)
 
-	// Check billing eligibility
 	if err := h.billingCacheService.CheckBillingEligibility(c.Request.Context(), apiKey.User, apiKey, apiKey.Group, subscription); err != nil {
 		h.errorResponse(c, http.StatusPaymentRequired, "insufficient_quota", "Insufficient quota")
 		return
@@ -1120,28 +1103,6 @@ func (h *OpenAIGatewayHandler) Embeddings(c *gin.Context) {
 	userAgent := c.GetHeader("User-Agent")
 	clientIP := c.ClientIP()
 
-	switch platform {
-	case service.PlatformOpenAI:
-		h.embeddingsOpenAI(c, apiKey, subscription, body, reqModel, userAgent, clientIP)
-	case service.PlatformGemini:
-		h.embeddingsGemini(c, apiKey, subscription, body, reqModel, userAgent, clientIP)
-	default:
-		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error",
-			"Embeddings not supported for platform: "+platform)
-	}
-}
-
-// embeddingsOpenAI handles /v1/embeddings for OpenAI platform groups
-// Passthrough to api.openai.com/v1/embeddings
-func (h *OpenAIGatewayHandler) embeddingsOpenAI(
-	c *gin.Context,
-	apiKey *service.APIKey,
-	subscription *service.UserSubscription,
-	body []byte,
-	reqModel string,
-	userAgent string,
-	clientIP string,
-) {
 	failedAccountIDs := make(map[int64]struct{})
 	for attempt := 0; attempt < h.maxAccountSwitches; attempt++ {
 		account, err := h.gatewayService.SelectAccountForModelWithExclusions(
@@ -1180,59 +1141,5 @@ func (h *OpenAIGatewayHandler) embeddingsOpenAI(
 	h.errorResponse(c, http.StatusBadGateway, "upstream_error", "Upstream request failed after all retries")
 }
 
-// embeddingsGemini handles /v1/embeddings for Gemini platform groups
-// Converts OpenAI format to Gemini embedContent and converts response back
-func (h *OpenAIGatewayHandler) embeddingsGemini(
-	c *gin.Context,
-	apiKey *service.APIKey,
-	subscription *service.UserSubscription,
-	body []byte,
-	reqModel string,
-	userAgent string,
-	clientIP string,
-) {
-	failedAccountIDs := make(map[int64]struct{})
-	for attempt := 0; attempt < h.maxAccountSwitches; attempt++ {
-		account, err := h.geminiCompatService.SelectAccountForModelWithExclusions(
-			c.Request.Context(), apiKey.GroupID, "", reqModel, failedAccountIDs)
-		if err != nil || account == nil {
-			h.errorResponse(c, http.StatusBadGateway, "upstream_error", "No available accounts")
-			return
-		}
-
-		result, err := h.geminiCompatService.ForwardEmbeddings(c.Request.Context(), c, account, body)
-		if err == nil {
-			h.submitUsageRecordTask(func(ctx context.Context) {
-				if err := h.gatewayService.RecordUsage(ctx, &service.OpenAIRecordUsageInput{
-					Result: &service.OpenAIForwardResult{
-						Usage: service.OpenAIUsage{
-							InputTokens:  result.Usage.InputTokens,
-							OutputTokens: 0,
-						},
-						Model: reqModel,
-					},
-					APIKey:       apiKey,
-					User:         apiKey.User,
-					Account:      account,
-					Subscription: subscription,
-					UserAgent:    userAgent,
-					IPAddress:    clientIP,
-					APIKeyService: h.apiKeyService,
-				}); err != nil {
-					// log error silently
-				}
-			})
-			return
-		}
-
-		var failoverErr *service.UpstreamFailoverError
-		if errors.As(err, &failoverErr) {
-			failedAccountIDs[account.ID] = struct{}{}
-			continue
-		}
-		return
-	}
-	h.errorResponse(c, http.StatusBadGateway, "upstream_error", "Upstream request failed after all retries")
-}
 
 
