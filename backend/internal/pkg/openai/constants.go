@@ -24,6 +24,10 @@ var DefaultModels = []Model{
 	{ID: "gpt-5.1", Object: "model", Created: 1731456000, OwnedBy: "openai", Type: "model", DisplayName: "GPT-5.1"},
 	{ID: "gpt-5.1-codex-mini", Object: "model", Created: 1730419200, OwnedBy: "openai", Type: "model", DisplayName: "GPT-5.1 Codex Mini"},
 	{ID: "gpt-5", Object: "model", Created: 1722988800, OwnedBy: "openai", Type: "model", DisplayName: "GPT-5"},
+	// Embedding models
+	{ID: "text-embedding-3-small", Object: "model", Created: 1705948800, OwnedBy: "openai", Type: "model", DisplayName: "Text Embedding 3 Small"},
+	{ID: "text-embedding-3-large", Object: "model", Created: 1705948800, OwnedBy: "openai", Type: "model", DisplayName: "Text Embedding 3 Large"},
+	{ID: "text-embedding-ada-002", Object: "model", Created: 1671062400, OwnedBy: "openai", Type: "model", DisplayName: "Text Embedding Ada 002"},
 }
 
 // DefaultModelIDs returns the default model ID list

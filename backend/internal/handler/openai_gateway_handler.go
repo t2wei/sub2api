@@ -1071,3 +1071,75 @@ func summarizeWSCloseErrorForLog(err error) (string, string) {
 	}
 	return closeStatus, closeReason
 }
+
+// Embeddings handles OpenAI /v1/embeddings endpoint.
+// Like /v1/responses, account selection and upstream routing is handled by the service layer.
+func (h *OpenAIGatewayHandler) Embeddings(c *gin.Context) {
+	apiKey, ok := middleware2.GetAPIKeyFromContext(c)
+	if !ok || apiKey == nil {
+		h.errorResponse(c, http.StatusUnauthorized, "invalid_api_key", "Invalid API Key")
+		return
+	}
+
+	body, err := pkghttputil.ReadRequestBodyWithPrealloc(c.Request)
+	if err != nil {
+		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "Failed to read request body")
+		return
+	}
+
+	reqModel := gjson.GetBytes(body, "model").String()
+	if reqModel == "" {
+		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "model is required")
+		return
+	}
+
+	subscription, _ := middleware2.GetSubscriptionFromContext(c)
+
+	if err := h.billingCacheService.CheckBillingEligibility(c.Request.Context(), apiKey.User, apiKey, apiKey.Group, subscription); err != nil {
+		h.errorResponse(c, http.StatusPaymentRequired, "insufficient_quota", "Insufficient quota")
+		return
+	}
+
+	userAgent := c.GetHeader("User-Agent")
+	clientIP := c.ClientIP()
+
+	failedAccountIDs := make(map[int64]struct{})
+	for attempt := 0; attempt < h.maxAccountSwitches; attempt++ {
+		account, err := h.gatewayService.SelectAccountForModelWithExclusions(
+			c.Request.Context(), apiKey.GroupID, "", reqModel, failedAccountIDs)
+		if err != nil || account == nil {
+			h.errorResponse(c, http.StatusBadGateway, "upstream_error", "No available accounts")
+			return
+		}
+
+		result, err := h.gatewayService.ForwardEmbeddings(c.Request.Context(), c, account, body)
+		if err == nil {
+			h.submitUsageRecordTask(func(ctx context.Context) {
+				if err := h.gatewayService.RecordUsage(ctx, &service.OpenAIRecordUsageInput{
+					Result:        result,
+					APIKey:        apiKey,
+					User:          apiKey.User,
+					Account:       account,
+					Subscription:  subscription,
+					UserAgent:     userAgent,
+					IPAddress:     clientIP,
+					APIKeyService: h.apiKeyService,
+				}); err != nil {
+					// log error silently
+				}
+			})
+			return
+		}
+
+		var failoverErr *service.UpstreamFailoverError
+		if errors.As(err, &failoverErr) {
+			failedAccountIDs[account.ID] = struct{}{}
+			continue
+		}
+		return
+	}
+	h.errorResponse(c, http.StatusBadGateway, "upstream_error", "Upstream request failed after all retries")
+}
+
+
+

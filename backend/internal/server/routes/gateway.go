@@ -44,6 +44,8 @@ func RegisterGatewayRoutes(
 		// OpenAI Responses API
 		gateway.POST("/responses", h.OpenAIGateway.Responses)
 		gateway.GET("/responses", h.OpenAIGateway.ResponsesWebSocket)
+		// OpenAI Embeddings API (Gemini backend)
+		gateway.POST("/embeddings", h.OpenAIGateway.Embeddings)
 		// 明确阻止旧协议入口：OpenAI 仅支持 Responses API，避免客户端误解为会自动路由到其它平台。
 		gateway.POST("/chat/completions", func(c *gin.Context) {
 			c.JSON(http.StatusBadRequest, gin.H{
