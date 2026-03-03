@@ -13,6 +13,7 @@ import (
 	"log"
 	"math"
 	mathrand "math/rand"
+	"net"
 	"net/http"
 	"regexp"
 	"strings"
@@ -1063,15 +1064,20 @@ func (s *GeminiMessagesCompatService) ForwardNative(ctx context.Context, c *gin.
 	}
 
 	switch action {
-	case "generateContent", "streamGenerateContent", "countTokens":
+	case "generateContent", "streamGenerateContent", "countTokens",
+		"embedContent", "batchEmbedContents":
 		// ok
 	default:
 		return nil, s.writeGoogleError(c, http.StatusNotFound, "Unsupported action: "+action)
 	}
 
-	// Some Gemini upstreams validate tool call parts strictly; ensure any `functionCall` part includes a
-	// `thoughtSignature` to avoid frequent INVALID_ARGUMENT 400s.
-	body = ensureGeminiFunctionCallThoughtSignatures(body)
+	// Skip preprocessing for embedding requests
+	isEmbeddingAction := action == "embedContent" || action == "batchEmbedContents"
+	if !isEmbeddingAction {
+		// Some Gemini upstreams validate tool call parts strictly; ensure any `functionCall` part includes a
+		// `thoughtSignature` to avoid frequent INVALID_ARGUMENT 400s.
+		body = ensureGeminiFunctionCallThoughtSignatures(body)
+	}
 
 	mappedModel := originalModel
 	if account.Type == AccountTypeAPIKey {
@@ -1504,7 +1510,7 @@ func (s *GeminiMessagesCompatService) ForwardNative(ctx context.Context, c *gin.
 			c.Data(http.StatusOK, "application/json", b)
 			usage = usageObj
 		} else {
-			usageResp, err := s.handleNativeNonStreamingResponse(c, resp, isOAuth)
+			usageResp, err := s.handleNativeNonStreamingResponse(c, resp, isOAuth, action)
 			if err != nil {
 				return nil, err
 			}
@@ -2389,7 +2395,7 @@ type UpstreamHTTPResult struct {
 	Body       []byte
 }
 
-func (s *GeminiMessagesCompatService) handleNativeNonStreamingResponse(c *gin.Context, resp *http.Response, isOAuth bool) (*ClaudeUsage, error) {
+func (s *GeminiMessagesCompatService) handleNativeNonStreamingResponse(c *gin.Context, resp *http.Response, isOAuth bool, action string) (*ClaudeUsage, error) {
 	if s.cfg != nil && s.cfg.Gateway.GeminiDebugResponseHeaders {
 		logger.LegacyPrintf("service.gemini_messages_compat", "[GeminiAPI] ========== Response Headers ==========")
 		for key, values := range resp.Header {
@@ -2430,8 +2436,16 @@ func (s *GeminiMessagesCompatService) handleNativeNonStreamingResponse(c *gin.Co
 	}
 	c.Data(resp.StatusCode, contentType, respBody)
 
-	if u := extractGeminiUsage(respBody); u != nil {
-		return u, nil
+	// Use appropriate usage extractor based on action type
+	isEmbeddingAction := action == "embedContent" || action == "batchEmbedContents"
+	if isEmbeddingAction {
+		if u := extractGeminiEmbeddingUsage(respBody); u != nil {
+			return u, nil
+		}
+	} else {
+		if u := extractGeminiUsage(respBody); u != nil {
+			return u, nil
+		}
 	}
 	return &ClaudeUsage{}, nil
 }
@@ -2690,6 +2704,23 @@ func extractGeminiUsage(data []byte) *ClaudeUsage {
 		InputTokens:          prompt - cached,
 		OutputTokens:         cand + thoughts,
 		CacheReadInputTokens: cached,
+	}
+}
+
+func extractGeminiEmbeddingUsage(data []byte) *ClaudeUsage {
+	// Embedding 响应格式：
+	// {"embedding": {"values": [...]}, "usageMetadata": {"promptTokenCount": 10}}
+	// batchEmbedContents 响应格式：
+	// {"embeddings": [{"values": [...]}], "usageMetadata": {"promptTokenCount": 10}}
+	usage := gjson.GetBytes(data, "usageMetadata")
+	if !usage.Exists() {
+		return nil
+	}
+	prompt := int(usage.Get("promptTokenCount").Int())
+	// Embedding 请求只有 input tokens，无 output tokens
+	return &ClaudeUsage{
+		InputTokens:  prompt,
+		OutputTokens: 0,
 	}
 }
 
@@ -3297,3 +3328,285 @@ func (s *GeminiMessagesCompatService) extractImageSize(body []byte) string {
 
 	return "2K"
 }
+
+// ForwardEmbeddings handles OpenAI format embedding requests by converting them to Gemini format
+func (s *GeminiMessagesCompatService) ForwardEmbeddings(ctx context.Context, c *gin.Context, account *Account, body []byte) (*ForwardResult, error) {
+	// Only support APIKey accounts for embeddings
+	if account.Type != AccountTypeAPIKey {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": gin.H{
+				"message": "Embedding only supports API Key authentication",
+				"type":    "invalid_request_error",
+			},
+		})
+		return nil, fmt.Errorf("embedding only supports APIKey accounts, got %s", account.Type)
+	}
+
+	// Parse OpenAI embedding request: {"model": "...", "input": "..."}
+	var openaiReq struct {
+		Model string      `json:"model"`
+		Input interface{} `json:"input"` // Can be string or []string
+	}
+	if err := json.Unmarshal(body, &openaiReq); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": gin.H{
+				"message": "Invalid request body",
+				"type":    "invalid_request_error",
+			},
+		})
+		return nil, fmt.Errorf("failed to parse embedding request: %w", err)
+	}
+
+	if openaiReq.Model == "" {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": gin.H{
+				"message": "model is required",
+				"type":    "invalid_request_error",
+			},
+		})
+		return nil, fmt.Errorf("model field is required")
+	}
+
+	// Extract input texts
+	var inputTexts []string
+	switch v := openaiReq.Input.(type) {
+	case string:
+		inputTexts = []string{v}
+	case []interface{}:
+		for _, item := range v {
+			if str, ok := item.(string); ok {
+				inputTexts = append(inputTexts, str)
+			}
+		}
+	}
+
+	if len(inputTexts) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": gin.H{
+				"message": "input must be a non-empty string or array of strings",
+				"type":    "invalid_request_error",
+			},
+		})
+		return nil, fmt.Errorf("no valid input texts found")
+	}
+
+	// Build Gemini request and choose action
+	var geminiReq []byte
+	var action string
+
+	if len(inputTexts) == 1 {
+		// Single embedding - use embedContent
+		action = "embedContent"
+		requestBody := map[string]interface{}{
+			"content": map[string]interface{}{
+				"parts": []map[string]interface{}{
+					{"text": inputTexts[0]},
+				},
+			},
+		}
+		var err error
+		geminiReq, err = json.Marshal(requestBody)
+		if err != nil {
+			return nil, fmt.Errorf("failed to marshal embedding request: %w", err)
+		}
+	} else {
+		// Multiple embeddings - use batchEmbedContents
+		action = "batchEmbedContents"
+		requests := make([]map[string]interface{}, len(inputTexts))
+		for i, text := range inputTexts {
+			requests[i] = map[string]interface{}{
+				"model": "models/" + strings.TrimPrefix(openaiReq.Model, "models/"),
+				"content": map[string]interface{}{
+					"parts": []map[string]interface{}{
+						{"text": text},
+					},
+				},
+			}
+		}
+		requestBody := map[string]interface{}{
+			"requests": requests,
+		}
+		var err error
+		geminiReq, err = json.Marshal(requestBody)
+		if err != nil {
+			return nil, fmt.Errorf("failed to marshal batch embedding request: %w", err)
+		}
+	}
+
+	// Create a wrapper response writer to capture Gemini response
+	geminiResponseBuffer := &bytes.Buffer{}
+	geminiResponseStatus := http.StatusOK
+	geminiResponseHeaders := make(http.Header)
+
+	// Create a custom gin context to capture response
+	captureWriter := &responseCapture{
+		writer: geminiResponseBuffer,
+		headers: geminiResponseHeaders,
+		statusCode: &geminiResponseStatus,
+	}
+
+	oldWriter := c.Writer
+	c.Writer = captureWriter
+
+	// Call ForwardNative to handle the Gemini API call
+	result, err := s.ForwardNative(ctx, c, account, openaiReq.Model, action, false, geminiReq)
+
+	c.Writer = oldWriter
+
+	if err != nil || geminiResponseStatus >= 400 {
+		// ForwardNative already wrote error response to capture writer
+		c.Data(geminiResponseStatus, geminiResponseHeaders.Get("Content-Type"), geminiResponseBuffer.Bytes())
+		return result, err
+	}
+
+	// Convert Gemini embedding response to OpenAI format
+	geminiResponseBody := geminiResponseBuffer.Bytes()
+	openaiResponse, convertErr := convertGeminiEmbeddingToOpenAI(geminiResponseBody, openaiReq.Model, len(inputTexts))
+	if convertErr != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": gin.H{
+				"message": "Failed to convert embedding response",
+				"type":    "server_error",
+			},
+		})
+		return result, convertErr
+	}
+
+	// Write OpenAI format response
+	responseBytes, _ := json.Marshal(openaiResponse)
+	c.Data(http.StatusOK, "application/json", responseBytes)
+
+	return result, nil
+}
+
+// responseCapture implements gin.ResponseWriter to capture response
+type responseCapture struct {
+	writer     *bytes.Buffer
+	headers    http.Header
+	statusCode *int
+	written    bool
+}
+
+func (rc *responseCapture) Header() http.Header {
+	return rc.headers
+}
+
+func (rc *responseCapture) Write(b []byte) (int, error) {
+	if !rc.written {
+		*rc.statusCode = http.StatusOK
+		rc.written = true
+	}
+	return rc.writer.Write(b)
+}
+
+func (rc *responseCapture) WriteHeader(statusCode int) {
+	if !rc.written {
+		*rc.statusCode = statusCode
+		rc.written = true
+	}
+}
+
+func (rc *responseCapture) Status() int {
+	if rc.statusCode != nil {
+		return *rc.statusCode
+	}
+	return http.StatusOK
+}
+
+func (rc *responseCapture) Size() int {
+	return rc.writer.Len()
+}
+
+func (rc *responseCapture) Written() bool {
+	return rc.written
+}
+
+func (rc *responseCapture) WriteString(s string) (int, error) {
+	if !rc.written {
+		*rc.statusCode = http.StatusOK
+		rc.written = true
+	}
+	return rc.writer.WriteString(s)
+}
+
+func (rc *responseCapture) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	return nil, nil, errors.New("hijack not supported")
+}
+
+func (rc *responseCapture) CloseNotify() <-chan bool {
+	return nil
+}
+
+func (rc *responseCapture) Flush() {
+}
+
+func (rc *responseCapture) Pusher() http.Pusher {
+	return nil
+}
+
+func (rc *responseCapture) WriteHeaderNow() {
+	if !rc.written {
+		*rc.statusCode = http.StatusOK
+		rc.written = true
+	}
+}
+
+
+
+// convertGeminiEmbeddingToOpenAI converts Gemini embedding response to OpenAI format
+func convertGeminiEmbeddingToOpenAI(geminiBody []byte, model string, count int) (interface{}, error) {
+	// Parse Gemini response
+	var geminiResp interface{}
+	if err := json.Unmarshal(geminiBody, &geminiResp); err != nil {
+		return nil, fmt.Errorf("failed to parse gemini response: %w", err)
+	}
+
+	resultData := []map[string]interface{}{}
+	totalTokens := 0
+
+	// Extract embeddings based on action (single vs batch)
+	respMap, ok := geminiResp.(map[string]interface{})
+	if !ok {
+		return nil, fmt.Errorf("gemini response is not a JSON object")
+	}
+
+	// Try single embedding format first
+	if embedding, ok := respMap["embedding"].(map[string]interface{}); ok {
+		values, _ := embedding["values"].([]interface{})
+		resultData = append(resultData, map[string]interface{}{
+			"object":    "embedding",
+			"embedding": values,
+			"index":     0,
+		})
+	} else if embeddings, ok := respMap["embeddings"].([]interface{}); ok {
+		// Batch embeddings format
+		for i, embItem := range embeddings {
+			if embMap, ok := embItem.(map[string]interface{}); ok {
+				values, _ := embMap["values"].([]interface{})
+				resultData = append(resultData, map[string]interface{}{
+					"object":    "embedding",
+					"embedding": values,
+					"index":     i,
+				})
+			}
+		}
+	}
+
+	// Extract usage
+	if usageMeta, ok := respMap["usageMetadata"].(map[string]interface{}); ok {
+		promptTokens, _ := usageMeta["promptTokenCount"].(float64)
+		totalTokens = int(promptTokens)
+	}
+
+	return map[string]interface{}{
+		"object": "list",
+		"data":   resultData,
+		"model":  model,
+		"usage": map[string]interface{}{
+			"prompt_tokens": totalTokens,
+			"total_tokens":  totalTokens,
+		},
+	}, nil
+}
+
+

@@ -503,30 +503,55 @@ func (h *GatewayHandler) GeminiV1BetaModels(c *gin.Context) {
 		}
 
 		// 使用量记录通过有界 worker 池提交，避免请求热路径创建无界 goroutine。
-		h.submitUsageRecordTask(func(ctx context.Context) {
-			if err := h.gatewayService.RecordUsageWithLongContext(ctx, &service.RecordUsageLongContextInput{
-				Result:                result,
-				APIKey:                apiKey,
-				User:                  apiKey.User,
-				Account:               account,
-				Subscription:          subscription,
-				UserAgent:             userAgent,
-				IPAddress:             clientIP,
-				LongContextThreshold:  200000, // Gemini 200K 阈值
-				LongContextMultiplier: 2.0,    // 超出部分双倍计费
-				ForceCacheBilling:     fs.ForceCacheBilling,
-				APIKeyService:         h.apiKeyService,
-			}); err != nil {
-				logger.L().With(
-					zap.String("component", "handler.gemini_v1beta.models"),
-					zap.Int64("user_id", authSubject.UserID),
-					zap.Int64("api_key_id", apiKey.ID),
-					zap.Any("group_id", apiKey.GroupID),
-					zap.String("model", modelName),
-					zap.Int64("account_id", account.ID),
-				).Error("gemini.record_usage_failed", zap.Error(err))
-			}
-		})
+		// Embedding 请求仅计 input tokens，不走长上下文双倍计费
+		isEmbeddingAction := action == "embedContent" || action == "batchEmbedContents"
+		if isEmbeddingAction {
+			h.submitUsageRecordTask(func(ctx context.Context) {
+				if err := h.gatewayService.RecordUsage(ctx, &service.RecordUsageInput{
+					Result:       result,
+					APIKey:       apiKey,
+					User:         apiKey.User,
+					Account:      account,
+					Subscription: subscription,
+					UserAgent:    userAgent,
+					IPAddress:    clientIP,
+				}); err != nil {
+					logger.L().With(
+						zap.String("component", "handler.gemini_v1beta.models"),
+						zap.Int64("user_id", authSubject.UserID),
+						zap.Int64("api_key_id", apiKey.ID),
+						zap.Any("group_id", apiKey.GroupID),
+						zap.String("model", modelName),
+						zap.Int64("account_id", account.ID),
+					).Error("gemini.record_usage_failed", zap.Error(err))
+				}
+			})
+		} else {
+			h.submitUsageRecordTask(func(ctx context.Context) {
+				if err := h.gatewayService.RecordUsageWithLongContext(ctx, &service.RecordUsageLongContextInput{
+					Result:                result,
+					APIKey:                apiKey,
+					User:                  apiKey.User,
+					Account:               account,
+					Subscription:          subscription,
+					UserAgent:             userAgent,
+					IPAddress:             clientIP,
+					LongContextThreshold:  200000, // Gemini 200K 阈值
+					LongContextMultiplier: 2.0,    // 超出部分双倍计费
+					ForceCacheBilling:     fs.ForceCacheBilling,
+					APIKeyService:         h.apiKeyService,
+				}); err != nil {
+					logger.L().With(
+						zap.String("component", "handler.gemini_v1beta.models"),
+						zap.Int64("user_id", authSubject.UserID),
+						zap.Int64("api_key_id", apiKey.ID),
+						zap.Any("group_id", apiKey.GroupID),
+						zap.String("model", modelName),
+						zap.Int64("account_id", account.ID),
+					).Error("gemini.record_usage_failed", zap.Error(err))
+				}
+			})
+		}
 		reqLog.Debug("gemini.request_completed",
 			zap.Int64("account_id", account.ID),
 			zap.Int("switch_count", fs.SwitchCount),

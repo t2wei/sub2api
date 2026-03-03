@@ -27,6 +27,7 @@ import (
 // OpenAIGatewayHandler handles OpenAI API gateway requests
 type OpenAIGatewayHandler struct {
 	gatewayService          *service.OpenAIGatewayService
+	geminiCompatService     *service.GeminiMessagesCompatService
 	billingCacheService     *service.BillingCacheService
 	apiKeyService           *service.APIKeyService
 	usageRecordWorkerPool   *service.UsageRecordWorkerPool
@@ -38,6 +39,7 @@ type OpenAIGatewayHandler struct {
 // NewOpenAIGatewayHandler creates a new OpenAIGatewayHandler
 func NewOpenAIGatewayHandler(
 	gatewayService *service.OpenAIGatewayService,
+	geminiCompatService *service.GeminiMessagesCompatService,
 	concurrencyService *service.ConcurrencyService,
 	billingCacheService *service.BillingCacheService,
 	apiKeyService *service.APIKeyService,
@@ -55,6 +57,7 @@ func NewOpenAIGatewayHandler(
 	}
 	return &OpenAIGatewayHandler{
 		gatewayService:          gatewayService,
+		geminiCompatService:     geminiCompatService,
 		billingCacheService:     billingCacheService,
 		apiKeyService:           apiKeyService,
 		usageRecordWorkerPool:   usageRecordWorkerPool,
@@ -1071,3 +1074,98 @@ func summarizeWSCloseErrorForLog(err error) (string, string) {
 	}
 	return closeStatus, closeReason
 }
+
+// Embeddings handles OpenAI embedding requests by forwarding to Gemini
+// POST /v1/embeddings
+func (h *OpenAIGatewayHandler) Embeddings(c *gin.Context) {
+	// Get apiKey and user from context (set by ApiKeyAuth middleware)
+	apiKey, ok := middleware2.GetAPIKeyFromContext(c)
+	if !ok || apiKey == nil {
+		h.errorResponse(c, http.StatusUnauthorized, "invalid_api_key", "Invalid API Key")
+		return
+	}
+
+	// For embedding, group must be Gemini platform
+	if apiKey.Group == nil || apiKey.Group.Platform != service.PlatformGemini {
+		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "API key group platform is not gemini")
+		return
+	}
+
+	// Read request body
+	body, err := pkghttputil.ReadRequestBodyWithPrealloc(c.Request)
+	if err != nil {
+		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "Failed to read request body")
+		return
+	}
+
+	// Extract model from request
+	reqModel := gjson.GetBytes(body, "model").String()
+	if reqModel == "" {
+		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "model is required")
+		return
+	}
+
+	subscription, _ := middleware2.GetSubscriptionFromContext(c)
+
+	// Check billing eligibility
+	if err := h.billingCacheService.CheckBillingEligibility(c.Request.Context(), apiKey.User, apiKey, apiKey.Group, subscription); err != nil {
+		h.errorResponse(c, http.StatusPaymentRequired, "insufficient_quota", "Insufficient quota")
+		return
+	}
+
+	userAgent := c.GetHeader("User-Agent")
+	clientIP := c.ClientIP()
+
+	// Failover loop - select account and forward
+	failedAccountIDs := make(map[int64]struct{})
+	for attempt := 0; attempt < h.maxAccountSwitches; attempt++ {
+		selection, err := h.gatewayService.SelectAccountForModelWithExclusions(
+			c.Request.Context(), apiKey.GroupID, "", reqModel, failedAccountIDs)
+		if err != nil || selection == nil {
+			h.errorResponse(c, http.StatusBadGateway, "upstream_error", "No available accounts")
+			return
+		}
+
+		account := selection
+
+		// Call Gemini embedding service
+		result, err := h.geminiCompatService.ForwardEmbeddings(c.Request.Context(), c, account, body)
+
+		if err == nil {
+			// Success - record usage and return
+			h.submitUsageRecordTask(func(ctx context.Context) {
+				if err := h.gatewayService.RecordUsage(ctx, &service.OpenAIRecordUsageInput{
+					Result: &service.OpenAIForwardResult{
+						Usage: service.OpenAIUsage{
+							InputTokens:  result.Usage.InputTokens,
+							OutputTokens: 0,
+						},
+					},
+					APIKey:       apiKey,
+					User:         apiKey.User,
+					Account:      account,
+					Subscription: subscription,
+					UserAgent:    userAgent,
+					IPAddress:    clientIP,
+				}); err != nil {
+					// Log error but don't fail the request
+				}
+			})
+			return
+		}
+
+		// Check if this is a failover error
+		var failoverErr *service.UpstreamFailoverError
+		if errors.As(err, &failoverErr) {
+			failedAccountIDs[account.ID] = struct{}{}
+			continue
+		}
+
+		// Non-failover error - return error response
+		return
+	}
+
+	// All failover attempts exhausted
+	h.errorResponse(c, http.StatusBadGateway, "upstream_error", "Upstream request failed after all retries")
+}
+
