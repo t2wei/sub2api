@@ -104,10 +104,10 @@ func TestAnthropicToResponses_ToolUse(t *testing.T) {
 	assert.Equal(t, "user", items[0].Role)
 	assert.Equal(t, "assistant", items[1].Role)
 	assert.Equal(t, "function_call", items[2].Type)
-	assert.Equal(t, "fc_call_1", items[2].CallID)
+	assert.Equal(t, "fc_a_call_1", items[2].CallID)
 	assert.Empty(t, items[2].ID)
 	assert.Equal(t, "function_call_output", items[3].Type)
-	assert.Equal(t, "fc_call_1", items[3].CallID)
+	assert.Equal(t, "fc_a_call_1", items[3].CallID)
 	assert.Equal(t, "Sunny, 72°F", items[3].Output)
 }
 
@@ -923,7 +923,7 @@ func TestAnthropicToResponses_ToolResultWithImage(t *testing.T) {
 
 	// function_call_output should have text-only output (no image).
 	assert.Equal(t, "function_call_output", items[2].Type)
-	assert.Equal(t, "fc_toolu_1", items[2].CallID)
+	assert.Equal(t, "fc_a_toolu_1", items[2].CallID)
 	assert.Equal(t, "(empty)", items[2].Output)
 
 	// Image should be in a separate user message.
