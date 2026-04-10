@@ -200,7 +200,7 @@ func (h *AuthHandler) OxSciOAuthCallback(c *gin.Context) {
 		return
 	}
 
-	email, username, subject, err := oxsciFetchUserInfo(c.Request.Context(), cfg, tokenResp)
+	email, username, subject, org, err := oxsciFetchUserInfo(c.Request.Context(), cfg, tokenResp)
 	if err != nil {
 		log.Printf("[OxSci OAuth] userinfo fetch failed: %v", err)
 		redirectOxSciOAuthError(c, frontendCallback, "userinfo_failed", "failed to fetch user info", "")
@@ -211,7 +211,14 @@ func (h *AuthHandler) OxSciOAuthCallback(c *gin.Context) {
 	// 不使用合成邮箱，因为我们信任 OxSci 的用户身份
 	// 使用 Trusted 版本，跳过注册开关检查，允许自动创建用户
 	_ = subject // subject 仅用于日志记录
-	log.Printf("[OxSci OAuth] User authenticated: email=%s, username=%s, subject=%s", email, username, subject)
+
+	if org != "OxSci.AI" {
+		log.Printf("[OxSci OAuth] Access denied: email=%s org=%q (not OxSci.AI member)", email, org)
+		redirectOxSciOAuthError(c, frontendCallback, "access_denied", "Only OxSci.AI members can log in", "")
+		return
+	}
+
+	log.Printf("[OxSci OAuth] User authenticated: email=%s, username=%s, subject=%s, org=%s", email, username, subject, org)
 
 	jwtToken, _, err := h.authService.LoginOrRegisterOAuthTrusted(c.Request.Context(), email, username)
 	if err != nil {
@@ -296,11 +303,11 @@ func oxsciFetchUserInfo(
 	ctx context.Context,
 	cfg config.OxSciOAuthConfig,
 	token *oxsciTokenResponse,
-) (email string, username string, subject string, err error) {
+) (email string, username string, subject string, org string, err error) {
 	client := req.C().SetTimeout(30 * time.Second)
 	authorization, err := buildOxSciBearerAuthorization(token.TokenType, token.AccessToken)
 	if err != nil {
-		return "", "", "", fmt.Errorf("invalid token for userinfo request: %w", err)
+		return "", "", "", "", fmt.Errorf("invalid token for userinfo request: %w", err)
 	}
 
 	resp, err := client.R().
@@ -309,16 +316,17 @@ func oxsciFetchUserInfo(
 		SetHeader("Authorization", authorization).
 		Get(cfg.UserInfoURL)
 	if err != nil {
-		return "", "", "", fmt.Errorf("request userinfo: %w", err)
+		return "", "", "", "", fmt.Errorf("request userinfo: %w", err)
 	}
 	if !resp.IsSuccessState() {
-		return "", "", "", fmt.Errorf("userinfo status=%d", resp.StatusCode)
+		return "", "", "", "", fmt.Errorf("userinfo status=%d", resp.StatusCode)
 	}
 
-	return oxsciParseUserInfo(resp.String())
+	email, username, subject, org, err = oxsciParseUserInfo(resp.String())
+	return email, username, subject, org, err
 }
 
-func oxsciParseUserInfo(body string) (email string, username string, subject string, err error) {
+func oxsciParseUserInfo(body string) (email string, username string, subject string, org string, err error) {
 	// OxSci userinfo 返回标准 OIDC 格式
 	email = firstOxSciNonEmpty(
 		getOxSciGJSON(body, "email"),
@@ -336,13 +344,17 @@ func oxsciParseUserInfo(body string) (email string, username string, subject str
 		getOxSciGJSON(body, "user_id"),
 		getOxSciGJSON(body, "data.id"),
 	)
+	org = firstOxSciNonEmpty(
+		getOxSciGJSON(body, "org"),
+		getOxSciGJSON(body, "data.org"),
+	)
 
 	subject = strings.TrimSpace(subject)
 	if subject == "" {
-		return "", "", "", errors.New("userinfo missing id field")
+		return "", "", "", "", errors.New("userinfo missing id field")
 	}
 	if !isSafeOxSciSubject(subject) {
-		return "", "", "", errors.New("userinfo returned invalid id field")
+		return "", "", "", "", errors.New("userinfo returned invalid id field")
 	}
 
 	email = strings.TrimSpace(email)
@@ -356,7 +368,7 @@ func oxsciParseUserInfo(body string) (email string, username string, subject str
 		username = "oxsci_" + subject
 	}
 
-	return email, username, subject, nil
+	return email, username, subject, org, nil
 }
 
 func buildOxSciAuthorizeURL(cfg config.OxSciOAuthConfig, state string, codeChallenge string, redirectURI string) (string, error) {
