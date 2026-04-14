@@ -14,8 +14,27 @@
       <!-- OxSci OAuth 登录 -->
       <OxSciOAuthSection v-if="oxsciOAuthEnabled" :disabled="isLoading" />
 
-      <!-- LinuxDo Connect OAuth 登录 -->
-      <LinuxDoOAuthSection v-if="linuxdoOAuthEnabled && !backendModeEnabled" :disabled="isLoading" />
+      <!-- LinuxDo Connect & OIDC OAuth 登录 -->
+      <div v-if="!backendModeEnabled && (linuxdoOAuthEnabled || oidcOAuthEnabled)" class="space-y-4">
+        <LinuxDoOAuthSection
+          v-if="linuxdoOAuthEnabled"
+          :disabled="isLoading"
+          :show-divider="false"
+        />
+        <OidcOAuthSection
+          v-if="oidcOAuthEnabled"
+          :disabled="isLoading"
+          :provider-name="oidcOAuthProviderName"
+          :show-divider="false"
+        />
+        <div class="flex items-center gap-3">
+          <div class="h-px flex-1 bg-gray-200 dark:bg-dark-700"></div>
+          <span class="text-xs text-gray-500 dark:text-dark-400">
+            {{ t('auth.oauthOrContinue') }}
+          </span>
+          <div class="h-px flex-1 bg-gray-200 dark:bg-dark-700"></div>
+        </div>
+      </div>
 
       <!-- Login Form -->
       <form @submit.prevent="handleLogin" class="space-y-5">
@@ -185,6 +204,7 @@ import { useI18n } from 'vue-i18n'
 import { AuthLayout } from '@/components/layout'
 import OxSciOAuthSection from '@/components/auth/OxSciOAuthSection.vue'
 import LinuxDoOAuthSection from '@/components/auth/LinuxDoOAuthSection.vue'
+import OidcOAuthSection from '@/components/auth/OidcOAuthSection.vue'
 import TotpLoginModal from '@/components/auth/TotpLoginModal.vue'
 import Icon from '@/components/icons/Icon.vue'
 import TurnstileWidget from '@/components/TurnstileWidget.vue'
@@ -212,6 +232,8 @@ const turnstileSiteKey = ref<string>('')
 const oxsciOAuthEnabled = ref<boolean>(false)
 const linuxdoOAuthEnabled = ref<boolean>(false)
 const backendModeEnabled = ref<boolean>(false)
+const oidcOAuthEnabled = ref<boolean>(false)
+const oidcOAuthProviderName = ref<string>('OIDC')
 const passwordResetEnabled = ref<boolean>(false)
 
 // Turnstile
@@ -252,6 +274,9 @@ onMounted(async () => {
     turnstileSiteKey.value = settings.turnstile_site_key || ''
     oxsciOAuthEnabled.value = settings.oxsci_oauth_enabled
     linuxdoOAuthEnabled.value = settings.linuxdo_oauth_enabled
+    backendModeEnabled.value = settings.backend_mode_enabled
+    oidcOAuthEnabled.value = settings.oidc_oauth_enabled
+    oidcOAuthProviderName.value = settings.oidc_oauth_provider_name || 'OIDC'
     backendModeEnabled.value = settings.backend_mode_enabled
     passwordResetEnabled.value = settings.password_reset_enabled
   } catch (error) {

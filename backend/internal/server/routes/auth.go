@@ -73,6 +73,15 @@ func RegisterAuthRoutes(
 		// OxSci OAuth2 登录（与 OxSci 生态系统集成）
 		auth.GET("/oauth/oxsci/start", h.Auth.OxSciOAuthStart)
 		auth.GET("/oauth/oxsci/callback", h.Auth.OxSciOAuthCallback)
+
+		auth.GET("/oauth/oidc/start", h.Auth.OIDCOAuthStart)
+		auth.GET("/oauth/oidc/callback", h.Auth.OIDCOAuthCallback)
+		auth.POST("/oauth/oidc/complete-registration",
+			rateLimiter.LimitWithOptions("oauth-oidc-complete", 10, time.Minute, middleware.RateLimitOptions{
+				FailureMode: middleware.RateLimitFailClose,
+			}),
+			h.Auth.CompleteOIDCOAuthRegistration,
+		)
 	}
 
 	// 公开设置（无需认证）
