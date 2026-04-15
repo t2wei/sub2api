@@ -314,8 +314,8 @@ func (h *AuthHandler) OIDCOAuthCallback(c *gin.Context) {
 		oidcFallbackUsername(subject),
 	)
 
-	// 传入空邀请码；如果需要邀请码，服务层返回 ErrOAuthInvitationRequired
-	tokenPair, _, err := h.authService.LoginOrRegisterOAuthWithTokenPair(c.Request.Context(), email, username, "")
+	// 使用 Trusted 注册：绕过注册开关，允许可信 OAuth 提供商自动创建用户
+	tokenPair, _, err := h.authService.LoginOrRegisterOAuthTrustedWithTokenPair(c.Request.Context(), email, username)
 	if err != nil {
 		if errors.Is(err, service.ErrOAuthInvitationRequired) {
 			pendingToken, tokenErr := h.authService.CreatePendingOAuthToken(email, username)

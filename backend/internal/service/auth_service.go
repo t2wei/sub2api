@@ -543,9 +543,19 @@ func (s *AuthService) loginOrRegisterOAuthInternal(ctx context.Context, email, u
 }
 
 // LoginOrRegisterOAuthWithTokenPair 用于第三方 OAuth/SSO 登录，返回完整的 TokenPair。
+// 与 LoginOrRegisterOAuthWithTokenPair 功能相同，但跳过注册开关检查。
+// 适用于可信的 OAuth 提供商（如内部 SSO），即使禁用了普通注册也能自动创建用户。
+func (s *AuthService) LoginOrRegisterOAuthTrustedWithTokenPair(ctx context.Context, email, username string) (*TokenPair, *User, error) {
+	return s.loginOrRegisterOAuthWithTokenPairInternal(ctx, email, username, "", true)
+}
+
 // 与 LoginOrRegisterOAuth 功能相同，但返回 TokenPair 而非单个 token。
 // invitationCode 仅在邀请码注册模式下新用户注册时使用；已有账号登录时忽略。
 func (s *AuthService) LoginOrRegisterOAuthWithTokenPair(ctx context.Context, email, username, invitationCode string) (*TokenPair, *User, error) {
+	return s.loginOrRegisterOAuthWithTokenPairInternal(ctx, email, username, invitationCode, false)
+}
+
+func (s *AuthService) loginOrRegisterOAuthWithTokenPairInternal(ctx context.Context, email, username, invitationCode string, skipRegCheck bool) (*TokenPair, *User, error) {
 	// 检查 refreshTokenCache 是否可用
 	if s.refreshTokenCache == nil {
 		return nil, nil, errors.New("refresh token cache not configured")
@@ -568,7 +578,8 @@ func (s *AuthService) LoginOrRegisterOAuthWithTokenPair(ctx context.Context, ema
 	if err != nil {
 		if errors.Is(err, ErrUserNotFound) {
 			// OAuth 首次登录视为注册
-			if s.settingService == nil || !s.settingService.IsRegistrationEnabled(ctx) {
+			// skipRegCheck=true 时跳过注册开关检查（用于可信的 OAuth 提供商）
+			if !skipRegCheck && (s.settingService == nil || !s.settingService.IsRegistrationEnabled(ctx)) {
 				return nil, nil, ErrRegDisabled
 			}
 
