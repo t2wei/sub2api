@@ -447,6 +447,29 @@ func (h *AuthHandler) OIDCOAuthCallback(c *gin.Context) {
 		return
 	}
 
+	// Passwordless (SSO-only) users have no way to complete the password-based bind
+	// flow. Since the OIDC authentication itself proves identity, and the real email
+	// matches an existing account with no password, auto-bind without a choice screen.
+	if compatEmailUser != nil && strings.TrimSpace(compatEmailUser.PasswordHash) == "" {
+		if err := h.createOAuthPendingSession(c, oauthPendingSessionPayload{
+			Intent:                 oauthIntentLogin,
+			Identity:               identityRef,
+			TargetUserID:           &compatEmailUser.ID,
+			ResolvedEmail:          compatEmailUser.Email,
+			RedirectTo:             redirectTo,
+			BrowserSessionKey:      browserSessionKey,
+			UpstreamIdentityClaims: upstreamClaims,
+			CompletionResponse: map[string]any{
+				"redirect": redirectTo,
+			},
+		}); err != nil {
+			redirectOAuthError(c, frontendCallback, "session_error", "failed to continue oauth login", "")
+			return
+		}
+		redirectToFrontendCallback(c, frontendCallback)
+		return
+	}
+
 	if cfg.RequireEmailVerified {
 		if emailVerified == nil || !*emailVerified {
 			redirectOAuthError(c, frontendCallback, "email_not_verified", "email is not verified", "")
