@@ -338,7 +338,8 @@ import {
   resolveWeChatOAuthStartStrict,
   type OAuthAdoptionDecision,
   type OAuthTokenResponse,
-  type PendingOAuthExchangeResponse
+  type PendingOAuthExchangeResponse,
+  type WeChatOAuthPublicSettings
 } from '@/api/auth'
 
 const route = useRoute()
@@ -475,7 +476,7 @@ function sanitizeRedirectPath(path: string | null | undefined): string {
 }
 
 async function ensurePublicSettingsLoaded(): Promise<void> {
-  if (hasExplicitWeChatOAuthCapabilities(appStore.cachedPublicSettings)) {
+  if (hasExplicitWeChatOAuthCapabilities(appStore.cachedPublicSettings as WeChatOAuthPublicSettings | null)) {
     return
   }
 
@@ -487,15 +488,15 @@ async function ensurePublicSettingsLoaded(): Promise<void> {
 }
 
 function resolveConfiguredWeChatOAuthMode(): 'open' | 'mp' | null {
-  if (!hasExplicitWeChatOAuthCapabilities(appStore.cachedPublicSettings)) {
+  if (!hasExplicitWeChatOAuthCapabilities(appStore.cachedPublicSettings as WeChatOAuthPublicSettings | null)) {
     return null
   }
 
-  return resolveWeChatOAuthStartStrict(appStore.cachedPublicSettings).mode
+  return resolveWeChatOAuthStartStrict(appStore.cachedPublicSettings as WeChatOAuthPublicSettings | null).mode
 }
 
 function resolveWeChatOAuthUnavailableMessage(): string {
-  const resolved = resolveWeChatOAuthStartStrict(appStore.cachedPublicSettings)
+  const resolved = resolveWeChatOAuthStartStrict(appStore.cachedPublicSettings as WeChatOAuthPublicSettings | null)
 
   switch (resolved.unavailableReason) {
     case 'capability_unknown':

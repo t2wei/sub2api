@@ -806,8 +806,6 @@ func authSourceSignupSettings(defaults *AuthSourceDefaultSettings, signupSource 
 		return defaults.LinuxDo, true
 	case "oidc":
 		return defaults.OIDC, true
-	case "wechat":
-		return defaults.WeChat, true
 	default:
 		return ProviderDefaultGrantSettings{}, false
 	}

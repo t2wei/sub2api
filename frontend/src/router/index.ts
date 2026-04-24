@@ -106,15 +106,6 @@ const routes: RouteRecordRaw[] = [
     }
   },
   {
-    path: '/auth/oxsci/callback',
-    name: 'OxSciOAuthCallback',
-    component: () => import('@/views/auth/OxSciCallbackView.vue'),
-    meta: {
-      requiresAuth: false,
-      title: 'OxSci OAuth Callback'
-    }
-  },
-  {
     path: '/auth/oidc/callback',
     name: 'OIDCOAuthCallback',
     component: () => import('@/views/auth/OidcCallbackView.vue'),

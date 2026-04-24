@@ -56,7 +56,7 @@ import ProfileBalanceNotifyCard from '@/components/user/profile/ProfileBalanceNo
 import ProfileInfoCard from '@/components/user/profile/ProfileInfoCard.vue'
 import ProfilePasswordForm from '@/components/user/profile/ProfilePasswordForm.vue'
 import ProfileTotpCard from '@/components/user/profile/ProfileTotpCard.vue'
-import { isWeChatWebOAuthEnabled } from '@/api/auth'
+import { isWeChatWebOAuthEnabled, type WeChatOAuthPublicSettings } from '@/api/auth'
 import { useAppStore } from '@/stores/app'
 import { useAuthStore } from '@/stores/auth'
 
@@ -89,12 +89,13 @@ onMounted(async () => {
       balanceLowNotifyEnabled.value = settings.balance_low_notify_enabled ?? false
       systemDefaultThreshold.value = settings.balance_low_notify_threshold ?? 0
       linuxdoOAuthEnabled.value = settings.linuxdo_oauth_enabled ?? false
-      wechatOAuthEnabled.value = isWeChatWebOAuthEnabled(settings)
-      wechatOAuthOpenEnabled.value = typeof settings.wechat_oauth_open_enabled === 'boolean'
-        ? settings.wechat_oauth_open_enabled
+      const wechatSettings = settings as unknown as WeChatOAuthPublicSettings
+      wechatOAuthEnabled.value = isWeChatWebOAuthEnabled(wechatSettings)
+      wechatOAuthOpenEnabled.value = typeof wechatSettings.wechat_oauth_open_enabled === 'boolean'
+        ? wechatSettings.wechat_oauth_open_enabled
         : undefined
-      wechatOAuthMPEnabled.value = typeof settings.wechat_oauth_mp_enabled === 'boolean'
-        ? settings.wechat_oauth_mp_enabled
+      wechatOAuthMPEnabled.value = typeof wechatSettings.wechat_oauth_mp_enabled === 'boolean'
+        ? wechatSettings.wechat_oauth_mp_enabled
         : undefined
       oidcOAuthEnabled.value = settings.oidc_oauth_enabled ?? false
       oidcOAuthProviderName.value = settings.oidc_oauth_provider_name || 'OIDC'

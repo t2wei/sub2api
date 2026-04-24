@@ -467,15 +467,6 @@ export default {
       completing: '正在完成注册...',
       completeRegistrationFailed: '注册失败，请检查邀请码后重试。'
     },
-    oxsci: {
-      signIn: '使用 OxSci 账号登录',
-      orContinue: '或使用邮箱密码继续',
-      callbackTitle: '正在完成登录',
-      callbackProcessing: '正在验证登录信息，请稍候...',
-      callbackHint: '如果页面未自动跳转，请返回登录页重试。',
-      callbackMissingToken: '登录信息缺失，请返回重试。',
-      backToLogin: '返回登录'
-    },
     oidc: {
       signIn: '使用 {providerName} 登录',
       callbackTitle: '正在完成 {providerName} 登录',

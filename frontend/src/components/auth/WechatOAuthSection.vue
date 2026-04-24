@@ -31,7 +31,7 @@
 import { computed, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
-import { resolveWeChatOAuthStart } from '@/api/auth'
+import { resolveWeChatOAuthStart, type WeChatOAuthPublicSettings } from '@/api/auth'
 import { useAppStore } from '@/stores'
 
 const props = withDefaults(defineProps<{
@@ -50,7 +50,7 @@ function localizeWeChatHint(zh: string, en: string): string {
   return locale.value.startsWith('zh') ? zh : en
 }
 
-const resolvedStart = computed(() => resolveWeChatOAuthStart(appStore.cachedPublicSettings))
+const resolvedStart = computed(() => resolveWeChatOAuthStart(appStore.cachedPublicSettings as WeChatOAuthPublicSettings | null))
 const buttonDisabled = computed(() => props.disabled || resolvedStart.value.mode === null)
 const disabledHint = computed(() => {
   if (props.disabled) {

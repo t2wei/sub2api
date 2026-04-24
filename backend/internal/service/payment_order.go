@@ -547,23 +547,11 @@ func requiresWeChatJSAPICompatibleSelection(req CreateOrderRequest, sel *payment
 	return req.IsWeChatBrowser || strings.TrimSpace(req.OpenID) != ""
 }
 
-func (s *PaymentService) getWeChatPaymentOAuthCredential(ctx context.Context) (string, string, error) {
-	if s == nil || s.configService == nil || s.configService.settingRepo == nil {
-		return "", "", infraerrors.ServiceUnavailable(
-			"WECHAT_PAYMENT_MP_NOT_CONFIGURED",
-			"wechat in-app payment requires a complete WeChat MP OAuth credential",
-		)
-	}
-	cfg, err := (&SettingService{settingRepo: s.configService.settingRepo}).GetWeChatConnectOAuthConfig(ctx)
-	appID := strings.TrimSpace(cfg.AppIDForMode("mp"))
-	appSecret := strings.TrimSpace(cfg.AppSecretForMode("mp"))
-	if err != nil || !cfg.SupportsMode("mp") || appID == "" || appSecret == "" {
-		return "", "", infraerrors.ServiceUnavailable(
-			"WECHAT_PAYMENT_MP_NOT_CONFIGURED",
-			"wechat in-app payment requires a complete WeChat MP OAuth credential",
-		)
-	}
-	return appID, appSecret, nil
+func (s *PaymentService) getWeChatPaymentOAuthCredential(_ context.Context) (string, string, error) {
+	return "", "", infraerrors.ServiceUnavailable(
+		"WECHAT_PAYMENT_MP_NOT_CONFIGURED",
+		"wechat in-app payment requires a complete WeChat MP OAuth credential",
+	)
 }
 
 func classifyCreatePaymentError(req CreateOrderRequest, providerKey string, err error) error {

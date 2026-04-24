@@ -332,7 +332,7 @@ function resolveLegacyCompatibleWeChatSettings(
 }
 
 const wechatOAuthSettings = computed<WeChatOAuthPublicSettings | null>(() => {
-  const cachedSettings = resolveLegacyCompatibleWeChatSettings(appStore.cachedPublicSettings)
+  const cachedSettings = resolveLegacyCompatibleWeChatSettings(appStore.cachedPublicSettings as WeChatOAuthPublicSettings | null)
   if (cachedSettings) {
     return cachedSettings
   }

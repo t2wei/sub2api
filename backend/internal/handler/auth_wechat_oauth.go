@@ -977,23 +977,23 @@ func (h *AuthHandler) getWeChatOAuthConfig(ctx context.Context, rawMode string, 
 		}
 	}
 
-	effective, err := h.settingSvc.GetWeChatConnectOAuthConfig(ctx)
+	allSettings, err := h.settingSvc.GetAllSettings(ctx)
 	if err != nil {
 		return wechatOAuthConfig{}, err
 	}
-	if !effective.SupportsMode(mode) {
+	if !wechatConnectSupportsMode(allSettings, mode) {
 		return wechatOAuthConfig{}, infraerrors.NotFound("OAUTH_DISABLED", "wechat oauth is disabled")
 	}
 
 	cfg := wechatOAuthConfig{
 		mode:             mode,
-		appID:            strings.TrimSpace(effective.AppIDForMode(mode)),
-		appSecret:        strings.TrimSpace(effective.AppSecretForMode(mode)),
-		redirectURI:      firstNonEmpty(strings.TrimSpace(effective.RedirectURL), resolveWeChatOAuthAbsoluteURL(apiBaseURL, c, "/api/v1/auth/oauth/wechat/callback")),
-		frontendCallback: firstNonEmpty(strings.TrimSpace(effective.FrontendRedirectURL), wechatOAuthDefaultFrontendCB),
-		scope:            effective.ScopeForMode(mode),
-		openEnabled:      effective.OpenEnabled,
-		mpEnabled:        effective.MPEnabled,
+		appID:            strings.TrimSpace(wechatConnectAppIDForMode(allSettings, mode)),
+		appSecret:        strings.TrimSpace(wechatConnectAppSecretForMode(allSettings, mode)),
+		redirectURI:      firstNonEmpty(strings.TrimSpace(allSettings.WeChatConnectRedirectURL), resolveWeChatOAuthAbsoluteURL(apiBaseURL, c, "/api/v1/auth/oauth/wechat/callback")),
+		frontendCallback: firstNonEmpty(strings.TrimSpace(allSettings.WeChatConnectFrontendRedirectURL), wechatOAuthDefaultFrontendCB),
+		scope:            strings.TrimSpace(allSettings.WeChatConnectScopes),
+		openEnabled:      allSettings.WeChatConnectOpenEnabled,
+		mpEnabled:        allSettings.WeChatConnectMPEnabled,
 	}
 
 	switch mode {
@@ -1015,12 +1015,57 @@ func (cfg wechatOAuthConfig) requiresUnionID() bool {
 
 func (h *AuthHandler) wechatOAuthFrontendCallback(ctx context.Context) string {
 	if h != nil && h.settingSvc != nil {
-		cfg, err := h.settingSvc.GetWeChatConnectOAuthConfig(ctx)
-		if err == nil && strings.TrimSpace(cfg.FrontendRedirectURL) != "" {
-			return strings.TrimSpace(cfg.FrontendRedirectURL)
+		settings, err := h.settingSvc.GetAllSettings(ctx)
+		if err == nil && settings != nil && strings.TrimSpace(settings.WeChatConnectFrontendRedirectURL) != "" {
+			return strings.TrimSpace(settings.WeChatConnectFrontendRedirectURL)
 		}
 	}
 	return wechatOAuthDefaultFrontendCB
+}
+
+func wechatConnectSupportsMode(s *service.SystemSettings, mode string) bool {
+	if s == nil || !s.WeChatConnectEnabled {
+		return false
+	}
+	switch mode {
+	case "open":
+		return s.WeChatConnectOpenEnabled
+	case "mp":
+		return s.WeChatConnectMPEnabled
+	case "mobile":
+		return s.WeChatConnectMobileEnabled
+	}
+	return false
+}
+
+func wechatConnectAppIDForMode(s *service.SystemSettings, mode string) string {
+	if s == nil {
+		return ""
+	}
+	switch mode {
+	case "open":
+		return firstNonEmpty(s.WeChatConnectOpenAppID, s.WeChatConnectAppID)
+	case "mp":
+		return firstNonEmpty(s.WeChatConnectMPAppID, s.WeChatConnectAppID)
+	case "mobile":
+		return firstNonEmpty(s.WeChatConnectMobileAppID, s.WeChatConnectAppID)
+	}
+	return s.WeChatConnectAppID
+}
+
+func wechatConnectAppSecretForMode(s *service.SystemSettings, mode string) string {
+	if s == nil {
+		return ""
+	}
+	switch mode {
+	case "open":
+		return firstNonEmpty(s.WeChatConnectOpenAppSecret, s.WeChatConnectAppSecret)
+	case "mp":
+		return firstNonEmpty(s.WeChatConnectMPAppSecret, s.WeChatConnectAppSecret)
+	case "mobile":
+		return firstNonEmpty(s.WeChatConnectMobileAppSecret, s.WeChatConnectAppSecret)
+	}
+	return s.WeChatConnectAppSecret
 }
 
 func resolveWeChatOAuthMode(rawMode string, c *gin.Context) (string, error) {
