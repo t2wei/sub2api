@@ -15,9 +15,18 @@ func TestResolveOpenAIForwardModel(t *testing.T) {
 			account: &Account{
 				Credentials: map[string]any{},
 			},
-			requestedModel:     "gpt-5.4",
+			requestedModel:     "claude-opus-4-6",
 			defaultMappedModel: "gpt-4o-mini",
 			expectedModel:      "gpt-4o-mini",
+		},
+		{
+			name: "preserves explicit gpt-5.4 instead of group default",
+			account: &Account{
+				Credentials: map[string]any{},
+			},
+			requestedModel:     "gpt-5.4",
+			defaultMappedModel: "gpt-4o-mini",
+			expectedModel:      "gpt-5.4",
 		},
 		{
 			name: "preserves exact passthrough mapping instead of group default",
@@ -58,6 +67,42 @@ func TestResolveOpenAIForwardModel(t *testing.T) {
 			defaultMappedModel: "gpt-4o-mini",
 			expectedModel:      "gpt-5.4",
 		},
+		{
+			name: "preserves codex spark instead of group default",
+			account: &Account{
+				Credentials: map[string]any{},
+			},
+			requestedModel:     "gpt-5.3-codex-spark",
+			defaultMappedModel: "gpt-5.4",
+			expectedModel:      "gpt-5.3-codex-spark",
+		},
+		{
+			name: "preserves gpt-5.5 instead of group default",
+			account: &Account{
+				Credentials: map[string]any{},
+			},
+			requestedModel:     "gpt-5.5",
+			defaultMappedModel: "gpt-5.4",
+			expectedModel:      "gpt-5.5",
+		},
+		{
+			name: "preserves openai namespaced gpt-5.5 instead of group default",
+			account: &Account{
+				Credentials: map[string]any{},
+			},
+			requestedModel:     "openai/gpt-5.5",
+			defaultMappedModel: "gpt-5.4",
+			expectedModel:      "openai/gpt-5.5",
+		},
+		{
+			name: "preserves compact gpt-5.5 instead of group default",
+			account: &Account{
+				Credentials: map[string]any{},
+			},
+			requestedModel:     "gpt-5.5-openai-compact",
+			defaultMappedModel: "gpt-5.4",
+			expectedModel:      "gpt-5.5-openai-compact",
+		},
 	}
 
 	for _, tt := range tests {
@@ -69,14 +114,14 @@ func TestResolveOpenAIForwardModel(t *testing.T) {
 	}
 }
 
-func TestResolveOpenAIForwardModel_PreventsClaudeModelFromFallingBackToGpt51(t *testing.T) {
+func TestResolveOpenAIForwardModel_PreventsClaudeModelFromFallingBackToGpt54(t *testing.T) {
 	account := &Account{
 		Credentials: map[string]any{},
 	}
 
 	withoutDefault := normalizeCodexModel(resolveOpenAIForwardModel(account, "claude-opus-4-6", ""))
-	if withoutDefault != "gpt-5.1" {
-		t.Fatalf("normalizeCodexModel(...) = %q, want %q", withoutDefault, "gpt-5.1")
+	if withoutDefault != "gpt-5.4" {
+		t.Fatalf("normalizeCodexModel(...) = %q, want %q", withoutDefault, "gpt-5.4")
 	}
 
 	withDefault := normalizeCodexModel(resolveOpenAIForwardModel(account, "claude-opus-4-6", "gpt-5.4"))
@@ -87,10 +132,11 @@ func TestResolveOpenAIForwardModel_PreventsClaudeModelFromFallingBackToGpt51(t *
 
 func TestNormalizeCodexModel(t *testing.T) {
 	cases := map[string]string{
-		"gpt-5.3-codex-spark":       "gpt-5.3-codex",
-		"gpt-5.3-codex-spark-high":  "gpt-5.3-codex",
-		"gpt-5.3-codex-spark-xhigh": "gpt-5.3-codex",
+		"gpt-5.3-codex-spark":       "gpt-5.3-codex-spark",
+		"gpt-5.3-codex-spark-high":  "gpt-5.3-codex-spark",
+		"gpt-5.3-codex-spark-xhigh": "gpt-5.3-codex-spark",
 		"gpt-5.3":                   "gpt-5.3-codex",
+		"gpt-image-2":               "gpt-image-2",
 	}
 
 	for input, expected := range cases {
@@ -111,7 +157,7 @@ func TestNormalizeOpenAIModelForUpstream(t *testing.T) {
 			name:    "oauth keeps codex normalization behavior",
 			account: &Account{Type: AccountTypeOAuth},
 			model:   "gemini-3-flash-preview",
-			want:    "gpt-5.1",
+			want:    "gpt-5.4",
 		},
 		{
 			name:    "apikey preserves custom compatible model",

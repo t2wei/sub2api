@@ -11,10 +11,7 @@
         </p>
       </div>
 
-      <!-- OxSci OAuth 登录 -->
-      <OxSciOAuthSection v-if="oxsciOAuthEnabled" :disabled="isLoading" />
-
-      <!-- LinuxDo Connect & OIDC OAuth 登录 -->
+      <!-- LinuxDo Connect & OIDC OAuth -->
       <div v-if="!backendModeEnabled && (linuxdoOAuthEnabled || oidcOAuthEnabled)" class="space-y-4">
         <LinuxDoOAuthSection
           v-if="linuxdoOAuthEnabled"
@@ -60,9 +57,6 @@
               :placeholder="t('auth.emailPlaceholder')"
             />
           </div>
-          <p v-if="errors.email" class="input-error-text">
-            {{ errors.email }}
-          </p>
         </div>
 
         <!-- Password Input -->
@@ -95,10 +89,7 @@
             </button>
           </div>
           <div class="mt-1 flex items-center justify-between">
-            <p v-if="errors.password" class="input-error-text">
-              {{ errors.password }}
-            </p>
-            <span v-else></span>
+            <span></span>
             <router-link
               v-if="passwordResetEnabled && !backendModeEnabled"
               to="/forgot-password"
@@ -118,27 +109,7 @@
             @expire="onTurnstileExpire"
             @error="onTurnstileError"
           />
-          <p v-if="errors.turnstile" class="input-error-text mt-2 text-center">
-            {{ errors.turnstile }}
-          </p>
         </div>
-
-        <!-- Error Message -->
-        <transition name="fade">
-          <div
-            v-if="errorMessage"
-            class="rounded-xl border border-red-200 bg-red-50 p-4 dark:border-red-800/50 dark:bg-red-900/20"
-          >
-            <div class="flex items-start gap-3">
-              <div class="flex-shrink-0">
-                <Icon name="exclamationCircle" size="md" class="text-red-500" />
-              </div>
-              <p class="text-sm text-red-700 dark:text-red-400">
-                {{ errorMessage }}
-              </p>
-            </div>
-          </div>
-        </transition>
 
         <!-- Submit Button -->
         <button
@@ -198,11 +169,10 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted } from 'vue'
+import { computed, ref, reactive, onMounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { AuthLayout } from '@/components/layout'
-import OxSciOAuthSection from '@/components/auth/OxSciOAuthSection.vue'
 import LinuxDoOAuthSection from '@/components/auth/LinuxDoOAuthSection.vue'
 import OidcOAuthSection from '@/components/auth/OidcOAuthSection.vue'
 import TotpLoginModal from '@/components/auth/TotpLoginModal.vue'
@@ -229,7 +199,6 @@ const showPassword = ref<boolean>(false)
 // Public settings
 const turnstileEnabled = ref<boolean>(false)
 const turnstileSiteKey = ref<string>('')
-const oxsciOAuthEnabled = ref<boolean>(false)
 const linuxdoOAuthEnabled = ref<boolean>(false)
 const backendModeEnabled = ref<boolean>(false)
 const oidcOAuthEnabled = ref<boolean>(false)
@@ -257,6 +226,16 @@ const errors = reactive({
   turnstile: ''
 })
 
+const validationToastMessage = computed(
+  () => errors.email || errors.password || errors.turnstile || ''
+)
+
+watch(validationToastMessage, (value, previousValue) => {
+  if (value && value !== previousValue) {
+    appStore.showError(value)
+  }
+})
+
 // ==================== Lifecycle ====================
 
 onMounted(async () => {
@@ -272,7 +251,6 @@ onMounted(async () => {
     const settings = await getPublicSettings()
     turnstileEnabled.value = settings.turnstile_enabled
     turnstileSiteKey.value = settings.turnstile_site_key || ''
-    oxsciOAuthEnabled.value = settings.oxsci_oauth_enabled
     linuxdoOAuthEnabled.value = settings.linuxdo_oauth_enabled
     backendModeEnabled.value = settings.backend_mode_enabled
     oidcOAuthEnabled.value = settings.oidc_oauth_enabled

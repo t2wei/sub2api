@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"net/url"
 	"sort"
 	"strconv"
@@ -99,14 +100,72 @@ type DefaultSubscriptionGroupReader interface {
 	GetByID(ctx context.Context, id int64) (*Group, error)
 }
 
+// WebSearchManagerBuilder creates a websearch.Manager from config (injected by infra layer).
+// proxyURLs maps proxy ID to resolved URL for provider-level proxy support.
+type WebSearchManagerBuilder func(cfg *WebSearchEmulationConfig, proxyURLs map[int64]string)
+
 // SettingService 系统设置服务
 type SettingService struct {
-	settingRepo           SettingRepository
-	defaultSubGroupReader DefaultSubscriptionGroupReader
-	cfg                   *config.Config
-	onUpdate              func() // Callback when settings are updated (for cache invalidation)
-	version               string // Application version
+	settingRepo             SettingRepository
+	defaultSubGroupReader   DefaultSubscriptionGroupReader
+	proxyRepo               ProxyRepository // for resolving websearch provider proxy URLs
+	cfg                     *config.Config
+	onUpdate                func() // Callback when settings are updated (for cache invalidation)
+	version                 string // Application version
+	webSearchManagerBuilder WebSearchManagerBuilder
 }
+
+type ProviderDefaultGrantSettings struct {
+	Balance          float64
+	Concurrency      int
+	Subscriptions    []DefaultSubscriptionSetting
+	GrantOnSignup    bool
+	GrantOnFirstBind bool
+}
+
+type AuthSourceDefaultSettings struct {
+	Email                        ProviderDefaultGrantSettings
+	LinuxDo                      ProviderDefaultGrantSettings
+	OIDC                         ProviderDefaultGrantSettings
+	ForceEmailOnThirdPartySignup bool
+}
+
+type authSourceDefaultKeySet struct {
+	balance          string
+	concurrency      string
+	subscriptions    string
+	grantOnSignup    string
+	grantOnFirstBind string
+}
+
+var (
+	emailAuthSourceDefaultKeys = authSourceDefaultKeySet{
+		balance:          SettingKeyAuthSourceDefaultEmailBalance,
+		concurrency:      SettingKeyAuthSourceDefaultEmailConcurrency,
+		subscriptions:    SettingKeyAuthSourceDefaultEmailSubscriptions,
+		grantOnSignup:    SettingKeyAuthSourceDefaultEmailGrantOnSignup,
+		grantOnFirstBind: SettingKeyAuthSourceDefaultEmailGrantOnFirstBind,
+	}
+	linuxDoAuthSourceDefaultKeys = authSourceDefaultKeySet{
+		balance:          SettingKeyAuthSourceDefaultLinuxDoBalance,
+		concurrency:      SettingKeyAuthSourceDefaultLinuxDoConcurrency,
+		subscriptions:    SettingKeyAuthSourceDefaultLinuxDoSubscriptions,
+		grantOnSignup:    SettingKeyAuthSourceDefaultLinuxDoGrantOnSignup,
+		grantOnFirstBind: SettingKeyAuthSourceDefaultLinuxDoGrantOnFirstBind,
+	}
+	oidcAuthSourceDefaultKeys = authSourceDefaultKeySet{
+		balance:          SettingKeyAuthSourceDefaultOIDCBalance,
+		concurrency:      SettingKeyAuthSourceDefaultOIDCConcurrency,
+		subscriptions:    SettingKeyAuthSourceDefaultOIDCSubscriptions,
+		grantOnSignup:    SettingKeyAuthSourceDefaultOIDCGrantOnSignup,
+		grantOnFirstBind: SettingKeyAuthSourceDefaultOIDCGrantOnFirstBind,
+	}
+)
+
+const (
+	defaultAuthSourceBalance     = 0
+	defaultAuthSourceConcurrency = 5
+)
 
 // NewSettingService 创建系统设置服务实例
 func NewSettingService(settingRepo SettingRepository, cfg *config.Config) *SettingService {
@@ -119,6 +178,11 @@ func NewSettingService(settingRepo SettingRepository, cfg *config.Config) *Setti
 // SetDefaultSubscriptionGroupReader injects an optional group reader for default subscription validation.
 func (s *SettingService) SetDefaultSubscriptionGroupReader(reader DefaultSubscriptionGroupReader) {
 	s.defaultSubGroupReader = reader
+}
+
+// SetProxyRepository injects a proxy repo for resolving websearch provider proxy URLs.
+func (s *SettingService) SetProxyRepository(repo ProxyRepository) {
+	s.proxyRepo = repo
 }
 
 // GetAllSettings 获取所有系统设置
@@ -145,6 +209,7 @@ func (s *SettingService) GetPublicSettings(ctx context.Context) (*PublicSettings
 	keys := []string{
 		SettingKeyRegistrationEnabled,
 		SettingKeyEmailVerifyEnabled,
+		SettingKeyForceEmailOnThirdPartySignup,
 		SettingKeyRegistrationEmailSuffixWhitelist,
 		SettingKeyPromoCodeEnabled,
 		SettingKeyPasswordResetEnabled,
@@ -168,9 +233,16 @@ func (s *SettingService) GetPublicSettings(ctx context.Context) (*PublicSettings
 		SettingKeyCustomEndpoints,
 		SettingKeyLinuxDoConnectEnabled,
 		SettingKeyBackendModeEnabled,
+		SettingPaymentEnabled,
 		SettingKeyOIDCConnectEnabled,
 		SettingKeyOIDCConnectProviderName,
-		SettingPaymentEnabled,
+		SettingKeyBalanceLowNotifyEnabled,
+		SettingKeyBalanceLowNotifyThreshold,
+		SettingKeyBalanceLowNotifyRechargeURL,
+		SettingKeyAccountQuotaNotifyEnabled,
+		SettingKeyChannelMonitorEnabled,
+		SettingKeyChannelMonitorDefaultIntervalSeconds,
+		SettingKeyAvailableChannelsEnabled,
 	}
 
 	settings, err := s.settingRepo.GetMultiple(ctx, keys)
@@ -197,10 +269,6 @@ func (s *SettingService) GetPublicSettings(ctx context.Context) (*PublicSettings
 	if oidcProviderName == "" {
 		oidcProviderName = "OIDC"
 	}
-
-	// OxSci OAuth 仅从配置文件读取（不支持动态配置）
-	oxsciEnabled := s.cfg != nil && s.cfg.OxSci.Enabled
-
 	// Password reset requires email verification to be enabled
 	emailVerifyEnabled := settings[SettingKeyEmailVerifyEnabled] == "true"
 	passwordResetEnabled := emailVerifyEnabled && settings[SettingKeyPasswordResetEnabled] == "true"
@@ -212,9 +280,15 @@ func (s *SettingService) GetPublicSettings(ctx context.Context) (*PublicSettings
 		settings[SettingKeyTablePageSizeOptions],
 	)
 
+	var balanceLowNotifyThreshold float64
+	if v, err := strconv.ParseFloat(settings[SettingKeyBalanceLowNotifyThreshold], 64); err == nil && v >= 0 {
+		balanceLowNotifyThreshold = v
+	}
+
 	return &PublicSettings{
 		RegistrationEnabled:              settings[SettingKeyRegistrationEnabled] == "true",
 		EmailVerifyEnabled:               emailVerifyEnabled,
+		ForceEmailOnThirdPartySignup:     settings[SettingKeyForceEmailOnThirdPartySignup] == "true",
 		RegistrationEmailSuffixWhitelist: registrationEmailSuffixWhitelist,
 		PromoCodeEnabled:                 settings[SettingKeyPromoCodeEnabled] != "false", // 默认启用
 		PasswordResetEnabled:             passwordResetEnabled,
@@ -238,11 +312,93 @@ func (s *SettingService) GetPublicSettings(ctx context.Context) (*PublicSettings
 		CustomEndpoints:                  settings[SettingKeyCustomEndpoints],
 		LinuxDoOAuthEnabled:              linuxDoEnabled,
 		BackendModeEnabled:               settings[SettingKeyBackendModeEnabled] == "true",
-		OxSciOAuthEnabled:                oxsciEnabled, // [OXSCI] OxSci OAuth2 登录
+		PaymentEnabled:                   settings[SettingPaymentEnabled] == "true",
 		OIDCOAuthEnabled:                 oidcEnabled,
 		OIDCOAuthProviderName:            oidcProviderName,
-		PaymentEnabled:                   settings[SettingPaymentEnabled] == "true",
+		BalanceLowNotifyEnabled:          settings[SettingKeyBalanceLowNotifyEnabled] == "true",
+		AccountQuotaNotifyEnabled:        settings[SettingKeyAccountQuotaNotifyEnabled] == "true",
+		BalanceLowNotifyThreshold:        balanceLowNotifyThreshold,
+		BalanceLowNotifyRechargeURL:      settings[SettingKeyBalanceLowNotifyRechargeURL],
+
+		ChannelMonitorEnabled:                !isFalseSettingValue(settings[SettingKeyChannelMonitorEnabled]),
+		ChannelMonitorDefaultIntervalSeconds: parseChannelMonitorInterval(settings[SettingKeyChannelMonitorDefaultIntervalSeconds]),
+
+		AvailableChannelsEnabled: settings[SettingKeyAvailableChannelsEnabled] == "true",
 	}, nil
+}
+
+// channelMonitorIntervalMin / channelMonitorIntervalMax bound the default interval
+// (mirrors the monitor-level constraint but lives here so setting_service stays decoupled).
+const (
+	channelMonitorIntervalMin      = 15
+	channelMonitorIntervalMax      = 3600
+	channelMonitorIntervalFallback = 60
+)
+
+// parseChannelMonitorInterval parses the stored string and clamps to [15, 3600].
+// Empty / invalid input falls back to channelMonitorIntervalFallback.
+func parseChannelMonitorInterval(raw string) int {
+	v, err := strconv.Atoi(strings.TrimSpace(raw))
+	if err != nil {
+		return channelMonitorIntervalFallback
+	}
+	return clampChannelMonitorInterval(v)
+}
+
+// clampChannelMonitorInterval clamps v to the allowed range. 0 means "not provided".
+func clampChannelMonitorInterval(v int) int {
+	if v <= 0 {
+		return 0
+	}
+	if v < channelMonitorIntervalMin {
+		return channelMonitorIntervalMin
+	}
+	if v > channelMonitorIntervalMax {
+		return channelMonitorIntervalMax
+	}
+	return v
+}
+
+// ChannelMonitorRuntime is the lightweight view of the channel monitor feature
+// consumed by the runner and user-facing handlers.
+type ChannelMonitorRuntime struct {
+	Enabled                bool
+	DefaultIntervalSeconds int
+}
+
+// GetChannelMonitorRuntime reads the channel monitor feature flags directly from
+// the settings store. Fail-open: on error returns Enabled=true with the default interval.
+func (s *SettingService) GetChannelMonitorRuntime(ctx context.Context) ChannelMonitorRuntime {
+	vals, err := s.settingRepo.GetMultiple(ctx, []string{
+		SettingKeyChannelMonitorEnabled,
+		SettingKeyChannelMonitorDefaultIntervalSeconds,
+	})
+	if err != nil {
+		return ChannelMonitorRuntime{Enabled: true, DefaultIntervalSeconds: channelMonitorIntervalFallback}
+	}
+	return ChannelMonitorRuntime{
+		Enabled:                !isFalseSettingValue(vals[SettingKeyChannelMonitorEnabled]),
+		DefaultIntervalSeconds: parseChannelMonitorInterval(vals[SettingKeyChannelMonitorDefaultIntervalSeconds]),
+	}
+}
+
+// AvailableChannelsRuntime is the lightweight view of the available-channels feature
+// switch consumed by the user-facing handler.
+type AvailableChannelsRuntime struct {
+	Enabled bool
+}
+
+// GetAvailableChannelsRuntime reads the available-channels feature switch directly
+// from the settings store. Fail-closed: on error returns Enabled=false, matching
+// the opt-in default (unknown ↔ disabled).
+func (s *SettingService) GetAvailableChannelsRuntime(ctx context.Context) AvailableChannelsRuntime {
+	vals, err := s.settingRepo.GetMultiple(ctx, []string{SettingKeyAvailableChannelsEnabled})
+	if err != nil {
+		return AvailableChannelsRuntime{Enabled: false}
+	}
+	return AvailableChannelsRuntime{
+		Enabled: vals[SettingKeyAvailableChannelsEnabled] == "true",
+	}
 }
 
 // SetOnUpdateCallback sets a callback function to be called when settings are updated
@@ -256,47 +412,71 @@ func (s *SettingService) SetVersion(version string) {
 	s.version = version
 }
 
-// GetPublicSettingsForInjection returns public settings in a format suitable for HTML injection
-// This implements the web.PublicSettingsProvider interface
+// PublicSettingsInjectionPayload is the JSON shape embedded into HTML as
+// `window.__APP_CONFIG__` so the frontend can hydrate feature flags & site
+// config before the first XHR finishes.
+//
+// INVARIANT: every `json` tag here MUST also exist on handler/dto.PublicSettings.
+// If you forget a feature-flag field here, the frontend's
+// `cachedPublicSettings.xxx_enabled` will be `undefined` on refresh until the
+// async `/api/v1/settings/public` call returns — which causes opt-in menus
+// (strict `=== true`) to flicker off/on. See
+// frontend/src/utils/featureFlags.ts for the matching registry.
+//
+// A unit test diffs this struct's JSON keys against dto.PublicSettings to catch
+// drift automatically (see setting_service_injection_test.go).
+type PublicSettingsInjectionPayload struct {
+	RegistrationEnabled              bool            `json:"registration_enabled"`
+	EmailVerifyEnabled               bool            `json:"email_verify_enabled"`
+	RegistrationEmailSuffixWhitelist []string        `json:"registration_email_suffix_whitelist"`
+	PromoCodeEnabled                 bool            `json:"promo_code_enabled"`
+	PasswordResetEnabled             bool            `json:"password_reset_enabled"`
+	InvitationCodeEnabled            bool            `json:"invitation_code_enabled"`
+	TotpEnabled                      bool            `json:"totp_enabled"`
+	TurnstileEnabled                 bool            `json:"turnstile_enabled"`
+	TurnstileSiteKey                 string          `json:"turnstile_site_key"`
+	SiteName                         string          `json:"site_name"`
+	SiteLogo                         string          `json:"site_logo"`
+	SiteSubtitle                     string          `json:"site_subtitle"`
+	APIBaseURL                       string          `json:"api_base_url"`
+	ContactInfo                      string          `json:"contact_info"`
+	DocURL                           string          `json:"doc_url"`
+	HomeContent                      string          `json:"home_content"`
+	HideCcsImportButton              bool            `json:"hide_ccs_import_button"`
+	PurchaseSubscriptionEnabled      bool            `json:"purchase_subscription_enabled"`
+	PurchaseSubscriptionURL          string          `json:"purchase_subscription_url"`
+	TableDefaultPageSize             int             `json:"table_default_page_size"`
+	TablePageSizeOptions             []int           `json:"table_page_size_options"`
+	CustomMenuItems                  json.RawMessage `json:"custom_menu_items"`
+	CustomEndpoints                  json.RawMessage `json:"custom_endpoints"`
+	LinuxDoOAuthEnabled              bool            `json:"linuxdo_oauth_enabled"`
+	OIDCOAuthEnabled                 bool            `json:"oidc_oauth_enabled"`
+	OIDCOAuthProviderName            string          `json:"oidc_oauth_provider_name"`
+	BackendModeEnabled               bool            `json:"backend_mode_enabled"`
+	PaymentEnabled                   bool            `json:"payment_enabled"`
+	Version                          string          `json:"version"`
+	BalanceLowNotifyEnabled          bool            `json:"balance_low_notify_enabled"`
+	AccountQuotaNotifyEnabled        bool            `json:"account_quota_notify_enabled"`
+	BalanceLowNotifyThreshold        float64         `json:"balance_low_notify_threshold"`
+	BalanceLowNotifyRechargeURL      string          `json:"balance_low_notify_recharge_url"`
+
+	// Feature flags — MUST match the opt-in/opt-out registry in
+	// frontend/src/utils/featureFlags.ts. Missing a field here is the bug
+	// that hid the "可用渠道" menu on page refresh.
+	ChannelMonitorEnabled                bool `json:"channel_monitor_enabled"`
+	ChannelMonitorDefaultIntervalSeconds int  `json:"channel_monitor_default_interval_seconds"`
+	AvailableChannelsEnabled             bool `json:"available_channels_enabled"`
+}
+
+// GetPublicSettingsForInjection returns public settings in a format suitable for HTML injection.
+// This implements the web.PublicSettingsProvider interface.
 func (s *SettingService) GetPublicSettingsForInjection(ctx context.Context) (any, error) {
 	settings, err := s.GetPublicSettings(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	// Return a struct that matches the frontend's expected format
-	return &struct {
-		RegistrationEnabled              bool            `json:"registration_enabled"`
-		EmailVerifyEnabled               bool            `json:"email_verify_enabled"`
-		RegistrationEmailSuffixWhitelist []string        `json:"registration_email_suffix_whitelist"`
-		PromoCodeEnabled                 bool            `json:"promo_code_enabled"`
-		PasswordResetEnabled             bool            `json:"password_reset_enabled"`
-		InvitationCodeEnabled            bool            `json:"invitation_code_enabled"`
-		TotpEnabled                      bool            `json:"totp_enabled"`
-		TurnstileEnabled                 bool            `json:"turnstile_enabled"`
-		TurnstileSiteKey                 string          `json:"turnstile_site_key,omitempty"`
-		SiteName                         string          `json:"site_name"`
-		SiteLogo                         string          `json:"site_logo,omitempty"`
-		SiteSubtitle                     string          `json:"site_subtitle,omitempty"`
-		APIBaseURL                       string          `json:"api_base_url,omitempty"`
-		ContactInfo                      string          `json:"contact_info,omitempty"`
-		DocURL                           string          `json:"doc_url,omitempty"`
-		HomeContent                      string          `json:"home_content,omitempty"`
-		HideCcsImportButton              bool            `json:"hide_ccs_import_button"`
-		PurchaseSubscriptionEnabled      bool            `json:"purchase_subscription_enabled"`
-		PurchaseSubscriptionURL          string          `json:"purchase_subscription_url,omitempty"`
-		TableDefaultPageSize             int             `json:"table_default_page_size"`
-		TablePageSizeOptions             []int           `json:"table_page_size_options"`
-		CustomMenuItems                  json.RawMessage `json:"custom_menu_items"`
-		CustomEndpoints                  json.RawMessage `json:"custom_endpoints"`
-		LinuxDoOAuthEnabled              bool            `json:"linuxdo_oauth_enabled"`
-		BackendModeEnabled               bool            `json:"backend_mode_enabled"`
-		OxSciOAuthEnabled                bool            `json:"oxsci_oauth_enabled"` // [OXSCI] OxSci OAuth2 登录
-		OIDCOAuthEnabled                 bool            `json:"oidc_oauth_enabled"`
-		OIDCOAuthProviderName            string          `json:"oidc_oauth_provider_name"`
-		PaymentEnabled                   bool            `json:"payment_enabled"`
-		Version                          string          `json:"version,omitempty"`
-	}{
+	return &PublicSettingsInjectionPayload{
 		RegistrationEnabled:              settings.RegistrationEnabled,
 		EmailVerifyEnabled:               settings.EmailVerifyEnabled,
 		RegistrationEmailSuffixWhitelist: settings.RegistrationEmailSuffixWhitelist,
@@ -321,12 +501,19 @@ func (s *SettingService) GetPublicSettingsForInjection(ctx context.Context) (any
 		CustomMenuItems:                  filterUserVisibleMenuItems(settings.CustomMenuItems),
 		CustomEndpoints:                  safeRawJSONArray(settings.CustomEndpoints),
 		LinuxDoOAuthEnabled:              settings.LinuxDoOAuthEnabled,
-		BackendModeEnabled:               settings.BackendModeEnabled,
-		OxSciOAuthEnabled:                settings.OxSciOAuthEnabled, // [OXSCI] OxSci OAuth2 登录
 		OIDCOAuthEnabled:                 settings.OIDCOAuthEnabled,
 		OIDCOAuthProviderName:            settings.OIDCOAuthProviderName,
+		BackendModeEnabled:               settings.BackendModeEnabled,
 		PaymentEnabled:                   settings.PaymentEnabled,
 		Version:                          s.version,
+		BalanceLowNotifyEnabled:          settings.BalanceLowNotifyEnabled,
+		AccountQuotaNotifyEnabled:        settings.AccountQuotaNotifyEnabled,
+		BalanceLowNotifyThreshold:        settings.BalanceLowNotifyThreshold,
+		BalanceLowNotifyRechargeURL:      settings.BalanceLowNotifyRechargeURL,
+
+		ChannelMonitorEnabled:                settings.ChannelMonitorEnabled,
+		ChannelMonitorDefaultIntervalSeconds: settings.ChannelMonitorDefaultIntervalSeconds,
+		AvailableChannelsEnabled:             settings.AvailableChannelsEnabled,
 	}, nil
 }
 
@@ -452,19 +639,120 @@ func parseCustomMenuItemURLs(raw string) []string {
 	return urls
 }
 
+func oidcUsePKCECompatibilityDefault(base config.OIDCConnectConfig) bool {
+	if base.UsePKCEExplicit {
+		return base.UsePKCE
+	}
+	return true
+}
+
+func oidcValidateIDTokenCompatibilityDefault(base config.OIDCConnectConfig) bool {
+	if base.ValidateIDTokenExplicit {
+		return base.ValidateIDToken
+	}
+	return true
+}
+
+func oidcCompatibilityWriteDefault(base config.OIDCConnectConfig, configured bool, raw string, explicit bool, explicitValue bool) bool {
+	if configured {
+		return strings.TrimSpace(raw) == "true"
+	}
+	if explicit {
+		return explicitValue
+	}
+	return false
+}
+
 // UpdateSettings 更新系统设置
 func (s *SettingService) UpdateSettings(ctx context.Context, settings *SystemSettings) error {
-	if err := s.validateDefaultSubscriptionGroups(ctx, settings.DefaultSubscriptions); err != nil {
+	updates, err := s.buildSystemSettingsUpdates(ctx, settings)
+	if err != nil {
 		return err
+	}
+
+	err = s.settingRepo.SetMultiple(ctx, updates)
+	if err == nil {
+		s.refreshCachedSettings(settings)
+	}
+	return err
+}
+
+func (s *SettingService) OIDCSecurityWriteDefaults(ctx context.Context) (bool, bool, error) {
+	rawSettings, err := s.settingRepo.GetMultiple(ctx, []string{
+		SettingKeyOIDCConnectUsePKCE,
+		SettingKeyOIDCConnectValidateIDToken,
+	})
+	if err != nil {
+		return false, false, fmt.Errorf("get oidc security write defaults: %w", err)
+	}
+
+	base := config.OIDCConnectConfig{}
+	if s != nil && s.cfg != nil {
+		base = s.cfg.OIDC
+	}
+
+	rawUsePKCE, hasUsePKCE := rawSettings[SettingKeyOIDCConnectUsePKCE]
+	rawValidateIDToken, hasValidateIDToken := rawSettings[SettingKeyOIDCConnectValidateIDToken]
+
+	return oidcCompatibilityWriteDefault(base, hasUsePKCE, rawUsePKCE, base.UsePKCEExplicit, base.UsePKCE),
+		oidcCompatibilityWriteDefault(base, hasValidateIDToken, rawValidateIDToken, base.ValidateIDTokenExplicit, base.ValidateIDToken),
+		nil
+}
+
+// UpdateSettingsWithAuthSourceDefaults persists system settings and auth-source defaults in a single write.
+func (s *SettingService) UpdateSettingsWithAuthSourceDefaults(ctx context.Context, settings *SystemSettings, authDefaults *AuthSourceDefaultSettings) error {
+	updates, err := s.buildSystemSettingsUpdates(ctx, settings)
+	if err != nil {
+		return err
+	}
+
+	authSourceUpdates, err := s.buildAuthSourceDefaultUpdates(ctx, authDefaults)
+	if err != nil {
+		return err
+	}
+	for key, value := range authSourceUpdates {
+		updates[key] = value
+	}
+
+	err = s.settingRepo.SetMultiple(ctx, updates)
+	if err == nil {
+		s.refreshCachedSettings(settings)
+	}
+	return err
+}
+
+func (s *SettingService) buildSystemSettingsUpdates(ctx context.Context, settings *SystemSettings) (map[string]string, error) {
+	if err := s.validateDefaultSubscriptionGroups(ctx, settings.DefaultSubscriptions); err != nil {
+		return nil, err
 	}
 	normalizedWhitelist, err := NormalizeRegistrationEmailSuffixWhitelist(settings.RegistrationEmailSuffixWhitelist)
 	if err != nil {
-		return infraerrors.BadRequest("INVALID_REGISTRATION_EMAIL_SUFFIX_WHITELIST", err.Error())
+		return nil, infraerrors.BadRequest("INVALID_REGISTRATION_EMAIL_SUFFIX_WHITELIST", err.Error())
 	}
 	if normalizedWhitelist == nil {
 		normalizedWhitelist = []string{}
 	}
 	settings.RegistrationEmailSuffixWhitelist = normalizedWhitelist
+	alipaySource, err := normalizeVisibleMethodSettingSource("alipay", settings.PaymentVisibleMethodAlipaySource, settings.PaymentVisibleMethodAlipayEnabled)
+	if err != nil {
+		return nil, err
+	}
+	wxpaySource, err := normalizeVisibleMethodSettingSource("wxpay", settings.PaymentVisibleMethodWxpaySource, settings.PaymentVisibleMethodWxpayEnabled)
+	if err != nil {
+		return nil, err
+	}
+	settings.PaymentVisibleMethodAlipaySource = alipaySource
+	settings.PaymentVisibleMethodWxpaySource = wxpaySource
+	settings.WeChatConnectAppID = strings.TrimSpace(settings.WeChatConnectAppID)
+	settings.WeChatConnectAppSecret = strings.TrimSpace(settings.WeChatConnectAppSecret)
+	settings.WeChatConnectOpenAppID = strings.TrimSpace(firstNonEmpty(settings.WeChatConnectOpenAppID, settings.WeChatConnectAppID))
+	settings.WeChatConnectOpenAppSecret = strings.TrimSpace(firstNonEmpty(settings.WeChatConnectOpenAppSecret, settings.WeChatConnectAppSecret))
+	settings.WeChatConnectMPAppID = strings.TrimSpace(firstNonEmpty(settings.WeChatConnectMPAppID, settings.WeChatConnectAppID))
+	settings.WeChatConnectMPAppSecret = strings.TrimSpace(firstNonEmpty(settings.WeChatConnectMPAppSecret, settings.WeChatConnectAppSecret))
+	settings.WeChatConnectMobileAppID = strings.TrimSpace(firstNonEmpty(settings.WeChatConnectMobileAppID, settings.WeChatConnectAppID))
+	settings.WeChatConnectMobileAppSecret = strings.TrimSpace(firstNonEmpty(settings.WeChatConnectMobileAppSecret, settings.WeChatConnectAppSecret))
+	settings.WeChatConnectRedirectURL = strings.TrimSpace(settings.WeChatConnectRedirectURL)
+	settings.WeChatConnectFrontendRedirectURL = strings.TrimSpace(settings.WeChatConnectFrontendRedirectURL)
 
 	updates := make(map[string]string)
 
@@ -473,7 +761,7 @@ func (s *SettingService) UpdateSettings(ctx context.Context, settings *SystemSet
 	updates[SettingKeyEmailVerifyEnabled] = strconv.FormatBool(settings.EmailVerifyEnabled)
 	registrationEmailSuffixWhitelistJSON, err := json.Marshal(settings.RegistrationEmailSuffixWhitelist)
 	if err != nil {
-		return fmt.Errorf("marshal registration email suffix whitelist: %w", err)
+		return nil, fmt.Errorf("marshal registration email suffix whitelist: %w", err)
 	}
 	updates[SettingKeyRegistrationEmailSuffixWhitelist] = string(registrationEmailSuffixWhitelistJSON)
 	updates[SettingKeyPromoCodeEnabled] = strconv.FormatBool(settings.PromoCodeEnabled)
@@ -534,6 +822,32 @@ func (s *SettingService) UpdateSettings(ctx context.Context, settings *SystemSet
 		updates[SettingKeyOIDCConnectClientSecret] = settings.OIDCConnectClientSecret
 	}
 
+	// WeChat Connect OAuth 登录
+	updates[SettingKeyWeChatConnectEnabled] = strconv.FormatBool(settings.WeChatConnectEnabled)
+	updates[SettingKeyWeChatConnectAppID] = settings.WeChatConnectAppID
+	updates[SettingKeyWeChatConnectOpenAppID] = settings.WeChatConnectOpenAppID
+	updates[SettingKeyWeChatConnectMPAppID] = settings.WeChatConnectMPAppID
+	updates[SettingKeyWeChatConnectMobileAppID] = settings.WeChatConnectMobileAppID
+	updates[SettingKeyWeChatConnectOpenEnabled] = strconv.FormatBool(settings.WeChatConnectOpenEnabled)
+	updates[SettingKeyWeChatConnectMPEnabled] = strconv.FormatBool(settings.WeChatConnectMPEnabled)
+	updates[SettingKeyWeChatConnectMobileEnabled] = strconv.FormatBool(settings.WeChatConnectMobileEnabled)
+	updates[SettingKeyWeChatConnectMode] = settings.WeChatConnectMode
+	updates[SettingKeyWeChatConnectScopes] = settings.WeChatConnectScopes
+	updates[SettingKeyWeChatConnectRedirectURL] = settings.WeChatConnectRedirectURL
+	updates[SettingKeyWeChatConnectFrontendRedirectURL] = settings.WeChatConnectFrontendRedirectURL
+	if settings.WeChatConnectAppSecret != "" {
+		updates[SettingKeyWeChatConnectAppSecret] = settings.WeChatConnectAppSecret
+	}
+	if settings.WeChatConnectOpenAppSecret != "" {
+		updates[SettingKeyWeChatConnectOpenAppSecret] = settings.WeChatConnectOpenAppSecret
+	}
+	if settings.WeChatConnectMPAppSecret != "" {
+		updates[SettingKeyWeChatConnectMPAppSecret] = settings.WeChatConnectMPAppSecret
+	}
+	if settings.WeChatConnectMobileAppSecret != "" {
+		updates[SettingKeyWeChatConnectMobileAppSecret] = settings.WeChatConnectMobileAppSecret
+	}
+
 	// OEM设置
 	updates[SettingKeySiteName] = settings.SiteName
 	updates[SettingKeySiteLogo] = settings.SiteLogo
@@ -552,7 +866,7 @@ func (s *SettingService) UpdateSettings(ctx context.Context, settings *SystemSet
 	updates[SettingKeyTableDefaultPageSize] = strconv.Itoa(tableDefaultPageSize)
 	tablePageSizeOptionsJSON, err := json.Marshal(tablePageSizeOptions)
 	if err != nil {
-		return fmt.Errorf("marshal table page size options: %w", err)
+		return nil, fmt.Errorf("marshal table page size options: %w", err)
 	}
 	updates[SettingKeyTablePageSizeOptions] = string(tablePageSizeOptionsJSON)
 	updates[SettingKeyCustomMenuItems] = settings.CustomMenuItems
@@ -561,9 +875,12 @@ func (s *SettingService) UpdateSettings(ctx context.Context, settings *SystemSet
 	// 默认配置
 	updates[SettingKeyDefaultConcurrency] = strconv.Itoa(settings.DefaultConcurrency)
 	updates[SettingKeyDefaultBalance] = strconv.FormatFloat(settings.DefaultBalance, 'f', 8, 64)
+	settings.AffiliateRebateRate = clampAffiliateRebateRate(settings.AffiliateRebateRate)
+	updates[SettingKeyAffiliateRebateRate] = strconv.FormatFloat(settings.AffiliateRebateRate, 'f', 8, 64)
+	updates[SettingKeyDefaultUserRPMLimit] = strconv.Itoa(settings.DefaultUserRPMLimit)
 	defaultSubsJSON, err := json.Marshal(settings.DefaultSubscriptions)
 	if err != nil {
-		return fmt.Errorf("marshal default subscriptions: %w", err)
+		return nil, fmt.Errorf("marshal default subscriptions: %w", err)
 	}
 	updates[SettingKeyDefaultSubscriptions] = string(defaultSubsJSON)
 
@@ -586,6 +903,15 @@ func (s *SettingService) UpdateSettings(ctx context.Context, settings *SystemSet
 		updates[SettingKeyOpsMetricsIntervalSeconds] = strconv.Itoa(settings.OpsMetricsIntervalSeconds)
 	}
 
+	// Channel monitor feature switch
+	updates[SettingKeyChannelMonitorEnabled] = strconv.FormatBool(settings.ChannelMonitorEnabled)
+	if v := clampChannelMonitorInterval(settings.ChannelMonitorDefaultIntervalSeconds); v > 0 {
+		updates[SettingKeyChannelMonitorDefaultIntervalSeconds] = strconv.Itoa(v)
+	}
+
+	// Available channels feature switch
+	updates[SettingKeyAvailableChannelsEnabled] = strconv.FormatBool(settings.AvailableChannelsEnabled)
+
 	// Claude Code version check
 	updates[SettingKeyMinClaudeCodeVersion] = settings.MinClaudeCodeVersion
 	updates[SettingKeyMaxClaudeCodeVersion] = settings.MaxClaudeCodeVersion
@@ -600,33 +926,77 @@ func (s *SettingService) UpdateSettings(ctx context.Context, settings *SystemSet
 	updates[SettingKeyEnableFingerprintUnification] = strconv.FormatBool(settings.EnableFingerprintUnification)
 	updates[SettingKeyEnableMetadataPassthrough] = strconv.FormatBool(settings.EnableMetadataPassthrough)
 	updates[SettingKeyEnableCCHSigning] = strconv.FormatBool(settings.EnableCCHSigning)
+	updates[SettingPaymentVisibleMethodAlipaySource] = settings.PaymentVisibleMethodAlipaySource
+	updates[SettingPaymentVisibleMethodWxpaySource] = settings.PaymentVisibleMethodWxpaySource
+	updates[SettingPaymentVisibleMethodAlipayEnabled] = strconv.FormatBool(settings.PaymentVisibleMethodAlipayEnabled)
+	updates[SettingPaymentVisibleMethodWxpayEnabled] = strconv.FormatBool(settings.PaymentVisibleMethodWxpayEnabled)
+	updates[openAIAdvancedSchedulerSettingKey] = strconv.FormatBool(settings.OpenAIAdvancedSchedulerEnabled)
 
-	err = s.settingRepo.SetMultiple(ctx, updates)
-	if err == nil {
-		// 先使 inflight singleflight 失效，再刷新缓存，缩小旧值覆盖新值的竞态窗口
-		versionBoundsSF.Forget("version_bounds")
-		versionBoundsCache.Store(&cachedVersionBounds{
-			min:       settings.MinClaudeCodeVersion,
-			max:       settings.MaxClaudeCodeVersion,
-			expiresAt: time.Now().Add(versionBoundsCacheTTL).UnixNano(),
-		})
-		backendModeSF.Forget("backend_mode")
-		backendModeCache.Store(&cachedBackendMode{
-			value:     settings.BackendModeEnabled,
-			expiresAt: time.Now().Add(backendModeCacheTTL).UnixNano(),
-		})
-		gatewayForwardingSF.Forget("gateway_forwarding")
-		gatewayForwardingCache.Store(&cachedGatewayForwardingSettings{
-			fingerprintUnification: settings.EnableFingerprintUnification,
-			metadataPassthrough:    settings.EnableMetadataPassthrough,
-			cchSigning:             settings.EnableCCHSigning,
-			expiresAt:              time.Now().Add(gatewayForwardingCacheTTL).UnixNano(),
-		})
-		if s.onUpdate != nil {
-			s.onUpdate() // Invalidate cache after settings update
+	// Balance low notification
+	updates[SettingKeyBalanceLowNotifyEnabled] = strconv.FormatBool(settings.BalanceLowNotifyEnabled)
+	updates[SettingKeyBalanceLowNotifyThreshold] = strconv.FormatFloat(settings.BalanceLowNotifyThreshold, 'f', 8, 64)
+	updates[SettingKeyBalanceLowNotifyRechargeURL] = settings.BalanceLowNotifyRechargeURL
+	updates[SettingKeyAccountQuotaNotifyEnabled] = strconv.FormatBool(settings.AccountQuotaNotifyEnabled)
+	updates[SettingKeyAccountQuotaNotifyEmails] = MarshalNotifyEmails(settings.AccountQuotaNotifyEmails)
+
+	return updates, nil
+}
+
+func (s *SettingService) buildAuthSourceDefaultUpdates(ctx context.Context, settings *AuthSourceDefaultSettings) (map[string]string, error) {
+	if settings == nil {
+		return nil, nil
+	}
+
+	for _, subscriptions := range [][]DefaultSubscriptionSetting{
+		settings.Email.Subscriptions,
+		settings.LinuxDo.Subscriptions,
+		settings.OIDC.Subscriptions,
+	} {
+		if err := s.validateDefaultSubscriptionGroups(ctx, subscriptions); err != nil {
+			return nil, err
 		}
 	}
-	return err
+
+	updates := make(map[string]string, 16)
+	writeProviderDefaultGrantUpdates(updates, emailAuthSourceDefaultKeys, settings.Email)
+	writeProviderDefaultGrantUpdates(updates, linuxDoAuthSourceDefaultKeys, settings.LinuxDo)
+	writeProviderDefaultGrantUpdates(updates, oidcAuthSourceDefaultKeys, settings.OIDC)
+	updates[SettingKeyForceEmailOnThirdPartySignup] = strconv.FormatBool(settings.ForceEmailOnThirdPartySignup)
+	return updates, nil
+}
+
+func (s *SettingService) refreshCachedSettings(settings *SystemSettings) {
+	if settings == nil {
+		return
+	}
+
+	// 先使 inflight singleflight 失效，再刷新缓存，缩小旧值覆盖新值的竞态窗口
+	versionBoundsSF.Forget("version_bounds")
+	versionBoundsCache.Store(&cachedVersionBounds{
+		min:       settings.MinClaudeCodeVersion,
+		max:       settings.MaxClaudeCodeVersion,
+		expiresAt: time.Now().Add(versionBoundsCacheTTL).UnixNano(),
+	})
+	backendModeSF.Forget("backend_mode")
+	backendModeCache.Store(&cachedBackendMode{
+		value:     settings.BackendModeEnabled,
+		expiresAt: time.Now().Add(backendModeCacheTTL).UnixNano(),
+	})
+	gatewayForwardingSF.Forget("gateway_forwarding")
+	gatewayForwardingCache.Store(&cachedGatewayForwardingSettings{
+		fingerprintUnification: settings.EnableFingerprintUnification,
+		metadataPassthrough:    settings.EnableMetadataPassthrough,
+		cchSigning:             settings.EnableCCHSigning,
+		expiresAt:              time.Now().Add(gatewayForwardingCacheTTL).UnixNano(),
+	})
+	openAIAdvancedSchedulerSettingSF.Forget(openAIAdvancedSchedulerSettingKey)
+	openAIAdvancedSchedulerSettingCache.Store(&cachedOpenAIAdvancedSchedulerSetting{
+		enabled:   settings.OpenAIAdvancedSchedulerEnabled,
+		expiresAt: time.Now().Add(openAIAdvancedSchedulerSettingCacheTTL).UnixNano(),
+	})
+	if s.onUpdate != nil {
+		s.onUpdate() // Invalidate cache after settings update
+	}
 }
 
 func (s *SettingService) validateDefaultSubscriptionGroups(ctx context.Context, items []DefaultSubscriptionSetting) error {
@@ -877,6 +1247,18 @@ func (s *SettingService) GetDefaultBalance(ctx context.Context) float64 {
 	return s.cfg.Default.UserBalance
 }
 
+// GetDefaultUserRPMLimit 获取新用户默认 RPM 限制（0 = 不限制）。未配置则返回 0。
+func (s *SettingService) GetDefaultUserRPMLimit(ctx context.Context) int {
+	value, err := s.settingRepo.GetValue(ctx, SettingKeyDefaultUserRPMLimit)
+	if err != nil || value == "" {
+		return 0
+	}
+	if v, err := strconv.Atoi(value); err == nil && v >= 0 {
+		return v
+	}
+	return 0
+}
+
 // GetDefaultSubscriptions 获取新用户默认订阅配置列表。
 func (s *SettingService) GetDefaultSubscriptions(ctx context.Context) []DefaultSubscriptionSetting {
 	value, err := s.settingRepo.GetValue(ctx, SettingKeyDefaultSubscriptions)
@@ -884,6 +1266,87 @@ func (s *SettingService) GetDefaultSubscriptions(ctx context.Context) []DefaultS
 		return nil
 	}
 	return parseDefaultSubscriptions(value)
+}
+
+func (s *SettingService) GetAuthSourceDefaultSettings(ctx context.Context) (*AuthSourceDefaultSettings, error) {
+	keys := []string{
+		SettingKeyAuthSourceDefaultEmailBalance,
+		SettingKeyAuthSourceDefaultEmailConcurrency,
+		SettingKeyAuthSourceDefaultEmailSubscriptions,
+		SettingKeyAuthSourceDefaultEmailGrantOnSignup,
+		SettingKeyAuthSourceDefaultEmailGrantOnFirstBind,
+		SettingKeyAuthSourceDefaultLinuxDoBalance,
+		SettingKeyAuthSourceDefaultLinuxDoConcurrency,
+		SettingKeyAuthSourceDefaultLinuxDoSubscriptions,
+		SettingKeyAuthSourceDefaultLinuxDoGrantOnSignup,
+		SettingKeyAuthSourceDefaultLinuxDoGrantOnFirstBind,
+		SettingKeyAuthSourceDefaultOIDCBalance,
+		SettingKeyAuthSourceDefaultOIDCConcurrency,
+		SettingKeyAuthSourceDefaultOIDCSubscriptions,
+		SettingKeyAuthSourceDefaultOIDCGrantOnSignup,
+		SettingKeyAuthSourceDefaultOIDCGrantOnFirstBind,
+		SettingKeyAuthSourceDefaultWeChatBalance,
+		SettingKeyAuthSourceDefaultWeChatConcurrency,
+		SettingKeyAuthSourceDefaultWeChatSubscriptions,
+		SettingKeyAuthSourceDefaultWeChatGrantOnSignup,
+		SettingKeyAuthSourceDefaultWeChatGrantOnFirstBind,
+		SettingKeyForceEmailOnThirdPartySignup,
+	}
+
+	settings, err := s.settingRepo.GetMultiple(ctx, keys)
+	if err != nil {
+		return nil, fmt.Errorf("get auth source default settings: %w", err)
+	}
+
+	return &AuthSourceDefaultSettings{
+		Email:                        parseProviderDefaultGrantSettings(settings, emailAuthSourceDefaultKeys),
+		LinuxDo:                      parseProviderDefaultGrantSettings(settings, linuxDoAuthSourceDefaultKeys),
+		OIDC:                         parseProviderDefaultGrantSettings(settings, oidcAuthSourceDefaultKeys),
+		ForceEmailOnThirdPartySignup: settings[SettingKeyForceEmailOnThirdPartySignup] == "true",
+	}, nil
+}
+
+func (s *SettingService) ResolveAuthSourceGrantSettings(ctx context.Context, signupSource string, firstBind bool) (ProviderDefaultGrantSettings, bool, error) {
+	result := ProviderDefaultGrantSettings{
+		Balance:       s.GetDefaultBalance(ctx),
+		Concurrency:   s.GetDefaultConcurrency(ctx),
+		Subscriptions: s.GetDefaultSubscriptions(ctx),
+	}
+
+	defaults, err := s.GetAuthSourceDefaultSettings(ctx)
+	if err != nil {
+		return result, false, err
+	}
+
+	providerDefaults, ok := authSourceSignupSettings(defaults, signupSource)
+	if !ok {
+		return result, false, nil
+	}
+
+	enabled := providerDefaults.GrantOnSignup
+	if firstBind {
+		enabled = providerDefaults.GrantOnFirstBind
+	}
+	if !enabled {
+		return result, false, nil
+	}
+
+	return mergeProviderDefaultGrantSettings(result, providerDefaults), true, nil
+}
+
+func (s *SettingService) UpdateAuthSourceDefaultSettings(ctx context.Context, settings *AuthSourceDefaultSettings) error {
+	updates, err := s.buildAuthSourceDefaultUpdates(ctx, settings)
+	if err != nil {
+		return err
+	}
+	if len(updates) == 0 {
+		return nil
+	}
+
+	if err := s.settingRepo.SetMultiple(ctx, updates); err != nil {
+		return fmt.Errorf("update auth source default settings: %w", err)
+	}
+	return nil
 }
 
 // InitializeDefaultSettings 初始化默认设置
@@ -898,27 +1361,97 @@ func (s *SettingService) InitializeDefaultSettings(ctx context.Context) error {
 		return fmt.Errorf("check existing settings: %w", err)
 	}
 
+	oidcUsePKCEDefault := true
+	oidcValidateIDTokenDefault := true
+	if s != nil && s.cfg != nil {
+		if s.cfg.OIDC.UsePKCEExplicit {
+			oidcUsePKCEDefault = s.cfg.OIDC.UsePKCE
+		}
+		if s.cfg.OIDC.ValidateIDTokenExplicit {
+			oidcValidateIDTokenDefault = s.cfg.OIDC.ValidateIDToken
+		}
+	}
+
 	// 初始化默认设置
 	defaults := map[string]string{
-		SettingKeyRegistrationEnabled:              "true",
-		SettingKeyEmailVerifyEnabled:               "false",
-		SettingKeyRegistrationEmailSuffixWhitelist: "[]",
-		SettingKeyPromoCodeEnabled:                 "true", // 默认启用优惠码功能
-		SettingKeySiteName:                         "Sub2API",
-		SettingKeySiteLogo:                         "",
-		SettingKeyPurchaseSubscriptionEnabled:      "false",
-		SettingKeyPurchaseSubscriptionURL:          "",
-		SettingKeyTableDefaultPageSize:             "20",
-		SettingKeyTablePageSizeOptions:             "[10,20,50,100]",
-		SettingKeyCustomMenuItems:                  "[]",
-		SettingKeyCustomEndpoints:                  "[]",
-		SettingKeyOIDCConnectEnabled:               "false",
-		SettingKeyOIDCConnectProviderName:          "OIDC",
-		SettingKeyDefaultConcurrency:               strconv.Itoa(s.cfg.Default.UserConcurrency),
-		SettingKeyDefaultBalance:                   strconv.FormatFloat(s.cfg.Default.UserBalance, 'f', 8, 64),
-		SettingKeyDefaultSubscriptions:             "[]",
-		SettingKeySMTPPort:                         "587",
-		SettingKeySMTPUseTLS:                       "false",
+		SettingKeyRegistrationEnabled:                      "true",
+		SettingKeyEmailVerifyEnabled:                       "false",
+		SettingKeyRegistrationEmailSuffixWhitelist:         "[]",
+		SettingKeyPromoCodeEnabled:                         "true", // 默认启用优惠码功能
+		SettingKeySiteName:                                 "Sub2API",
+		SettingKeySiteLogo:                                 "",
+		SettingKeyPurchaseSubscriptionEnabled:              "false",
+		SettingKeyPurchaseSubscriptionURL:                  "",
+		SettingKeyTableDefaultPageSize:                     "20",
+		SettingKeyTablePageSizeOptions:                     "[10,20,50,100]",
+		SettingKeyCustomMenuItems:                          "[]",
+		SettingKeyCustomEndpoints:                          "[]",
+		SettingKeyWeChatConnectEnabled:                     "false",
+		SettingKeyWeChatConnectAppID:                       "",
+		SettingKeyWeChatConnectAppSecret:                   "",
+		SettingKeyWeChatConnectOpenAppID:                   "",
+		SettingKeyWeChatConnectOpenAppSecret:               "",
+		SettingKeyWeChatConnectMPAppID:                     "",
+		SettingKeyWeChatConnectMPAppSecret:                 "",
+		SettingKeyWeChatConnectMobileAppID:                 "",
+		SettingKeyWeChatConnectMobileAppSecret:             "",
+		SettingKeyWeChatConnectOpenEnabled:                 "false",
+		SettingKeyWeChatConnectMPEnabled:                   "false",
+		SettingKeyWeChatConnectMobileEnabled:               "false",
+		SettingKeyWeChatConnectMode:                        "open",
+		SettingKeyWeChatConnectScopes:                      "snsapi_login",
+		SettingKeyWeChatConnectRedirectURL:                 "",
+		SettingKeyWeChatConnectFrontendRedirectURL:         "",
+		SettingKeyOIDCConnectEnabled:                       "false",
+		SettingKeyOIDCConnectProviderName:                  "OIDC",
+		SettingKeyOIDCConnectClientID:                      "",
+		SettingKeyOIDCConnectClientSecret:                  "",
+		SettingKeyOIDCConnectIssuerURL:                     "",
+		SettingKeyOIDCConnectDiscoveryURL:                  "",
+		SettingKeyOIDCConnectAuthorizeURL:                  "",
+		SettingKeyOIDCConnectTokenURL:                      "",
+		SettingKeyOIDCConnectUserInfoURL:                   "",
+		SettingKeyOIDCConnectJWKSURL:                       "",
+		SettingKeyOIDCConnectScopes:                        "openid email profile",
+		SettingKeyOIDCConnectRedirectURL:                   "",
+		SettingKeyOIDCConnectFrontendRedirectURL:           "/auth/oidc/callback",
+		SettingKeyOIDCConnectTokenAuthMethod:               "client_secret_post",
+		SettingKeyOIDCConnectUsePKCE:                       strconv.FormatBool(oidcUsePKCEDefault),
+		SettingKeyOIDCConnectValidateIDToken:               strconv.FormatBool(oidcValidateIDTokenDefault),
+		SettingKeyOIDCConnectAllowedSigningAlgs:            "RS256,ES256,PS256",
+		SettingKeyOIDCConnectClockSkewSeconds:              "120",
+		SettingKeyOIDCConnectRequireEmailVerified:          "false",
+		SettingKeyOIDCConnectUserInfoEmailPath:             "",
+		SettingKeyOIDCConnectUserInfoIDPath:                "",
+		SettingKeyOIDCConnectUserInfoUsernamePath:          "",
+		SettingKeyDefaultConcurrency:                       strconv.Itoa(s.cfg.Default.UserConcurrency),
+		SettingKeyDefaultBalance:                           strconv.FormatFloat(s.cfg.Default.UserBalance, 'f', 8, 64),
+		SettingKeyAffiliateRebateRate:                      strconv.FormatFloat(AffiliateRebateRateDefault, 'f', 8, 64),
+		SettingKeyDefaultUserRPMLimit:                      "0",
+		SettingKeyDefaultSubscriptions:                     "[]",
+		SettingKeyAuthSourceDefaultEmailBalance:            "0",
+		SettingKeyAuthSourceDefaultEmailConcurrency:        "5",
+		SettingKeyAuthSourceDefaultEmailSubscriptions:      "[]",
+		SettingKeyAuthSourceDefaultEmailGrantOnSignup:      "false",
+		SettingKeyAuthSourceDefaultEmailGrantOnFirstBind:   "false",
+		SettingKeyAuthSourceDefaultLinuxDoBalance:          "0",
+		SettingKeyAuthSourceDefaultLinuxDoConcurrency:      "5",
+		SettingKeyAuthSourceDefaultLinuxDoSubscriptions:    "[]",
+		SettingKeyAuthSourceDefaultLinuxDoGrantOnSignup:    "false",
+		SettingKeyAuthSourceDefaultLinuxDoGrantOnFirstBind: "false",
+		SettingKeyAuthSourceDefaultOIDCBalance:             "0",
+		SettingKeyAuthSourceDefaultOIDCConcurrency:         "5",
+		SettingKeyAuthSourceDefaultOIDCSubscriptions:       "[]",
+		SettingKeyAuthSourceDefaultOIDCGrantOnSignup:       "false",
+		SettingKeyAuthSourceDefaultOIDCGrantOnFirstBind:    "false",
+		SettingKeyAuthSourceDefaultWeChatBalance:           "0",
+		SettingKeyAuthSourceDefaultWeChatConcurrency:       "5",
+		SettingKeyAuthSourceDefaultWeChatSubscriptions:     "[]",
+		SettingKeyAuthSourceDefaultWeChatGrantOnSignup:     "false",
+		SettingKeyAuthSourceDefaultWeChatGrantOnFirstBind:  "false",
+		SettingKeyForceEmailOnThirdPartySignup:             "false",
+		SettingKeySMTPPort:                                 "587",
+		SettingKeySMTPUseTLS:                               "false",
 		// Model fallback defaults
 		SettingKeyEnableModelFallback:      "false",
 		SettingKeyFallbackModelAnthropic:   "claude-3-5-sonnet-20241022",
@@ -935,12 +1468,24 @@ func (s *SettingService) InitializeDefaultSettings(ctx context.Context) error {
 		SettingKeyOpsQueryModeDefault:          "auto",
 		SettingKeyOpsMetricsIntervalSeconds:    "60",
 
+		// Channel monitor defaults (enabled, 60s)
+		SettingKeyChannelMonitorEnabled:                "true",
+		SettingKeyChannelMonitorDefaultIntervalSeconds: "60",
+
+		// Available channels feature (default disabled; opt-in)
+		SettingKeyAvailableChannelsEnabled: "false",
+
 		// Claude Code version check (default: empty = disabled)
 		SettingKeyMinClaudeCodeVersion: "",
 		SettingKeyMaxClaudeCodeVersion: "",
 
 		// 分组隔离（默认不允许未分组 Key 调度）
-		SettingKeyAllowUngroupedKeyScheduling: "false",
+		SettingKeyAllowUngroupedKeyScheduling:    "false",
+		SettingPaymentVisibleMethodAlipaySource:  "",
+		SettingPaymentVisibleMethodWxpaySource:   "",
+		SettingPaymentVisibleMethodAlipayEnabled: "false",
+		SettingPaymentVisibleMethodWxpayEnabled:  "false",
+		openAIAdvancedSchedulerSettingKey:        "false",
 	}
 
 	return s.settingRepo.SetMultiple(ctx, defaults)
@@ -999,11 +1544,20 @@ func (s *SettingService) parseSettings(settings map[string]string) *SystemSettin
 		result.DefaultConcurrency = s.cfg.Default.UserConcurrency
 	}
 
+	if rpm, err := strconv.Atoi(settings[SettingKeyDefaultUserRPMLimit]); err == nil && rpm >= 0 {
+		result.DefaultUserRPMLimit = rpm
+	}
+
 	// 解析浮点数类型
 	if balance, err := strconv.ParseFloat(settings[SettingKeyDefaultBalance], 64); err == nil {
 		result.DefaultBalance = balance
 	} else {
 		result.DefaultBalance = s.cfg.Default.UserBalance
+	}
+	if rebateRate, err := strconv.ParseFloat(settings[SettingKeyAffiliateRebateRate], 64); err == nil {
+		result.AffiliateRebateRate = clampAffiliateRebateRate(rebateRate)
+	} else {
+		result.AffiliateRebateRate = AffiliateRebateRateDefault
 	}
 	result.DefaultSubscriptions = parseDefaultSubscriptions(settings[SettingKeyDefaultSubscriptions])
 
@@ -1124,12 +1678,12 @@ func (s *SettingService) parseSettings(settings map[string]string) *SystemSettin
 	if raw, ok := settings[SettingKeyOIDCConnectUsePKCE]; ok {
 		result.OIDCConnectUsePKCE = raw == "true"
 	} else {
-		result.OIDCConnectUsePKCE = oidcBase.UsePKCE
+		result.OIDCConnectUsePKCE = oidcUsePKCECompatibilityDefault(oidcBase)
 	}
 	if raw, ok := settings[SettingKeyOIDCConnectValidateIDToken]; ok {
 		result.OIDCConnectValidateIDToken = raw == "true"
 	} else {
-		result.OIDCConnectValidateIDToken = oidcBase.ValidateIDToken
+		result.OIDCConnectValidateIDToken = oidcValidateIDTokenCompatibilityDefault(oidcBase)
 	}
 	if v, ok := settings[SettingKeyOIDCConnectAllowedSigningAlgs]; ok && strings.TrimSpace(v) != "" {
 		result.OIDCConnectAllowedSigningAlgs = strings.TrimSpace(v)
@@ -1175,6 +1729,28 @@ func (s *SettingService) parseSettings(settings map[string]string) *SystemSettin
 	}
 	result.OIDCConnectClientSecretConfigured = result.OIDCConnectClientSecret != ""
 
+	// WeChat Connect settings (read directly from DB settings map)
+	result.WeChatConnectEnabled = settings[SettingKeyWeChatConnectEnabled] == "true"
+	result.WeChatConnectAppID = settings[SettingKeyWeChatConnectAppID]
+	result.WeChatConnectAppSecret = settings[SettingKeyWeChatConnectAppSecret]
+	result.WeChatConnectAppSecretConfigured = settings[SettingKeyWeChatConnectAppSecret] != ""
+	result.WeChatConnectOpenAppID = settings[SettingKeyWeChatConnectOpenAppID]
+	result.WeChatConnectOpenAppSecret = settings[SettingKeyWeChatConnectOpenAppSecret]
+	result.WeChatConnectOpenAppSecretConfigured = settings[SettingKeyWeChatConnectOpenAppSecret] != ""
+	result.WeChatConnectMPAppID = settings[SettingKeyWeChatConnectMPAppID]
+	result.WeChatConnectMPAppSecret = settings[SettingKeyWeChatConnectMPAppSecret]
+	result.WeChatConnectMPAppSecretConfigured = settings[SettingKeyWeChatConnectMPAppSecret] != ""
+	result.WeChatConnectMobileAppID = settings[SettingKeyWeChatConnectMobileAppID]
+	result.WeChatConnectMobileAppSecret = settings[SettingKeyWeChatConnectMobileAppSecret]
+	result.WeChatConnectMobileAppSecretConfigured = settings[SettingKeyWeChatConnectMobileAppSecret] != ""
+	result.WeChatConnectOpenEnabled = settings[SettingKeyWeChatConnectOpenEnabled] == "true"
+	result.WeChatConnectMPEnabled = settings[SettingKeyWeChatConnectMPEnabled] == "true"
+	result.WeChatConnectMobileEnabled = settings[SettingKeyWeChatConnectMobileEnabled] == "true"
+	result.WeChatConnectMode = settings[SettingKeyWeChatConnectMode]
+	result.WeChatConnectScopes = settings[SettingKeyWeChatConnectScopes]
+	result.WeChatConnectRedirectURL = settings[SettingKeyWeChatConnectRedirectURL]
+	result.WeChatConnectFrontendRedirectURL = settings[SettingKeyWeChatConnectFrontendRedirectURL]
+
 	// Model fallback settings
 	result.EnableModelFallback = settings[SettingKeyEnableModelFallback] == "true"
 	result.FallbackModelAnthropic = s.getStringOrDefault(settings, SettingKeyFallbackModelAnthropic, "claude-3-5-sonnet-20241022")
@@ -1207,6 +1783,15 @@ func (s *SettingService) parseSettings(settings map[string]string) *SystemSettin
 		}
 	}
 
+	// Channel monitor feature (default: enabled, 60s)
+	result.ChannelMonitorEnabled = !isFalseSettingValue(settings[SettingKeyChannelMonitorEnabled])
+	result.ChannelMonitorDefaultIntervalSeconds = parseChannelMonitorInterval(
+		settings[SettingKeyChannelMonitorDefaultIntervalSeconds],
+	)
+
+	// Available channels feature (default: disabled; strict true)
+	result.AvailableChannelsEnabled = settings[SettingKeyAvailableChannelsEnabled] == "true"
+
 	// Claude Code version check
 	result.MinClaudeCodeVersion = settings[SettingKeyMinClaudeCodeVersion]
 	result.MaxClaudeCodeVersion = settings[SettingKeyMaxClaudeCodeVersion]
@@ -1223,7 +1808,49 @@ func (s *SettingService) parseSettings(settings map[string]string) *SystemSettin
 	result.EnableMetadataPassthrough = settings[SettingKeyEnableMetadataPassthrough] == "true"
 	result.EnableCCHSigning = settings[SettingKeyEnableCCHSigning] == "true"
 
+	// Web search emulation: quick enabled check from the JSON config
+	if raw := settings[SettingKeyWebSearchEmulationConfig]; raw != "" {
+		var wsCfg WebSearchEmulationConfig
+		if err := json.Unmarshal([]byte(raw), &wsCfg); err == nil {
+			result.WebSearchEmulationEnabled = wsCfg.Enabled && len(wsCfg.Providers) > 0
+		}
+	}
+	result.PaymentVisibleMethodAlipaySource = NormalizeVisibleMethodSource("alipay", settings[SettingPaymentVisibleMethodAlipaySource])
+	result.PaymentVisibleMethodWxpaySource = NormalizeVisibleMethodSource("wxpay", settings[SettingPaymentVisibleMethodWxpaySource])
+	result.PaymentVisibleMethodAlipayEnabled = settings[SettingPaymentVisibleMethodAlipayEnabled] == "true"
+	result.PaymentVisibleMethodWxpayEnabled = settings[SettingPaymentVisibleMethodWxpayEnabled] == "true"
+	result.OpenAIAdvancedSchedulerEnabled = settings[openAIAdvancedSchedulerSettingKey] == "true"
+
+	// Balance low notification
+	result.BalanceLowNotifyEnabled = settings[SettingKeyBalanceLowNotifyEnabled] == "true"
+	if v, err := strconv.ParseFloat(settings[SettingKeyBalanceLowNotifyThreshold], 64); err == nil && v >= 0 {
+		result.BalanceLowNotifyThreshold = v
+	}
+	result.BalanceLowNotifyRechargeURL = settings[SettingKeyBalanceLowNotifyRechargeURL]
+
+	// Account quota notification
+	result.AccountQuotaNotifyEnabled = settings[SettingKeyAccountQuotaNotifyEnabled] == "true"
+	if raw := strings.TrimSpace(settings[SettingKeyAccountQuotaNotifyEmails]); raw != "" {
+		result.AccountQuotaNotifyEmails = ParseNotifyEmails(raw)
+	}
+	if result.AccountQuotaNotifyEmails == nil {
+		result.AccountQuotaNotifyEmails = []NotifyEmailEntry{}
+	}
+
 	return result
+}
+
+func clampAffiliateRebateRate(value float64) float64 {
+	if math.IsNaN(value) || math.IsInf(value, 0) {
+		return AffiliateRebateRateDefault
+	}
+	if value < AffiliateRebateRateMin {
+		return AffiliateRebateRateMin
+	}
+	if value > AffiliateRebateRateMax {
+		return AffiliateRebateRateMax
+	}
+	return value
 }
 
 func isFalseSettingValue(value string) bool {
@@ -1233,6 +1860,23 @@ func isFalseSettingValue(value string) bool {
 	default:
 		return false
 	}
+}
+
+func normalizeVisibleMethodSettingSource(method, source string, enabled bool) (string, error) {
+	_ = enabled
+	source = strings.TrimSpace(source)
+	if source == "" {
+		return "", nil
+	}
+
+	normalized := NormalizeVisibleMethodSource(method, source)
+	if normalized == "" {
+		return "", infraerrors.BadRequest(
+			"INVALID_PAYMENT_VISIBLE_METHOD_SOURCE",
+			fmt.Sprintf("%s source must be one of the supported payment providers", method),
+		)
+	}
+	return normalized, nil
 }
 
 func parseDefaultSubscriptions(raw string) []DefaultSubscriptionSetting {
@@ -1258,6 +1902,73 @@ func parseDefaultSubscriptions(raw string) []DefaultSubscriptionSetting {
 	}
 
 	return normalized
+}
+
+func parseProviderDefaultGrantSettings(settings map[string]string, keys authSourceDefaultKeySet) ProviderDefaultGrantSettings {
+	result := ProviderDefaultGrantSettings{
+		Balance:          defaultAuthSourceBalance,
+		Concurrency:      defaultAuthSourceConcurrency,
+		Subscriptions:    []DefaultSubscriptionSetting{},
+		GrantOnSignup:    false,
+		GrantOnFirstBind: false,
+	}
+
+	if v, err := strconv.ParseFloat(strings.TrimSpace(settings[keys.balance]), 64); err == nil {
+		result.Balance = v
+	}
+	if v, err := strconv.Atoi(strings.TrimSpace(settings[keys.concurrency])); err == nil {
+		result.Concurrency = v
+	}
+	if items := parseDefaultSubscriptions(settings[keys.subscriptions]); items != nil {
+		result.Subscriptions = items
+	}
+	if raw, ok := settings[keys.grantOnSignup]; ok {
+		result.GrantOnSignup = raw == "true"
+	}
+	if raw, ok := settings[keys.grantOnFirstBind]; ok {
+		result.GrantOnFirstBind = raw == "true"
+	}
+
+	return result
+}
+
+func writeProviderDefaultGrantUpdates(updates map[string]string, keys authSourceDefaultKeySet, settings ProviderDefaultGrantSettings) {
+	updates[keys.balance] = strconv.FormatFloat(settings.Balance, 'f', 8, 64)
+	updates[keys.concurrency] = strconv.Itoa(settings.Concurrency)
+
+	subscriptions := settings.Subscriptions
+	if subscriptions == nil {
+		subscriptions = []DefaultSubscriptionSetting{}
+	}
+	raw, err := json.Marshal(subscriptions)
+	if err != nil {
+		raw = []byte("[]")
+	}
+	updates[keys.subscriptions] = string(raw)
+	updates[keys.grantOnSignup] = strconv.FormatBool(settings.GrantOnSignup)
+	updates[keys.grantOnFirstBind] = strconv.FormatBool(settings.GrantOnFirstBind)
+}
+
+func mergeProviderDefaultGrantSettings(globalDefaults ProviderDefaultGrantSettings, providerDefaults ProviderDefaultGrantSettings) ProviderDefaultGrantSettings {
+	result := ProviderDefaultGrantSettings{
+		Balance:          globalDefaults.Balance,
+		Concurrency:      globalDefaults.Concurrency,
+		Subscriptions:    append([]DefaultSubscriptionSetting(nil), globalDefaults.Subscriptions...),
+		GrantOnSignup:    providerDefaults.GrantOnSignup,
+		GrantOnFirstBind: providerDefaults.GrantOnFirstBind,
+	}
+
+	if providerDefaults.Balance != defaultAuthSourceBalance {
+		result.Balance = providerDefaults.Balance
+	}
+	if providerDefaults.Concurrency > 0 && providerDefaults.Concurrency != defaultAuthSourceConcurrency {
+		result.Concurrency = providerDefaults.Concurrency
+	}
+	if len(providerDefaults.Subscriptions) > 0 {
+		result.Subscriptions = append([]DefaultSubscriptionSetting(nil), providerDefaults.Subscriptions...)
+	}
+
+	return result
 }
 
 func parseTablePreferences(defaultPageSizeRaw, optionsRaw string) (int, []int) {
@@ -1482,7 +2193,6 @@ func (s *SettingService) GetLinuxDoConnectOAuthConfig(ctx context.Context) (conf
 	if v, ok := settings[SettingKeyLinuxDoConnectRedirectURL]; ok && strings.TrimSpace(v) != "" {
 		effective.RedirectURL = strings.TrimSpace(v)
 	}
-
 	if !effective.Enabled {
 		return config.LinuxDoConnectConfig{}, infraerrors.NotFound("OAUTH_DISABLED", "oauth login is disabled")
 	}
@@ -1530,9 +2240,6 @@ func (s *SettingService) GetLinuxDoConnectOAuthConfig(ctx context.Context) (conf
 			return config.LinuxDoConnectConfig{}, infraerrors.InternalServer("OAUTH_CONFIG_INVALID", "oauth client secret not configured")
 		}
 	case "none":
-		if !effective.UsePKCE {
-			return config.LinuxDoConnectConfig{}, infraerrors.InternalServer("OAUTH_CONFIG_INVALID", "oauth pkce must be enabled when token_auth_method=none")
-		}
 	default:
 		return config.LinuxDoConnectConfig{}, infraerrors.InternalServer("OAUTH_CONFIG_INVALID", "oauth token_auth_method invalid")
 	}
@@ -1676,9 +2383,13 @@ func (s *SettingService) GetOIDCConnectOAuthConfig(ctx context.Context) (config.
 	}
 	if raw, ok := settings[SettingKeyOIDCConnectUsePKCE]; ok {
 		effective.UsePKCE = raw == "true"
+	} else {
+		effective.UsePKCE = oidcUsePKCECompatibilityDefault(effective)
 	}
 	if raw, ok := settings[SettingKeyOIDCConnectValidateIDToken]; ok {
 		effective.ValidateIDToken = raw == "true"
+	} else {
+		effective.ValidateIDToken = oidcValidateIDTokenCompatibilityDefault(effective)
 	}
 	if v, ok := settings[SettingKeyOIDCConnectAllowedSigningAlgs]; ok && strings.TrimSpace(v) != "" {
 		effective.AllowedSigningAlgs = strings.TrimSpace(v)
@@ -1807,9 +2518,6 @@ func (s *SettingService) GetOIDCConnectOAuthConfig(ctx context.Context) (config.
 			return config.OIDCConnectConfig{}, infraerrors.InternalServer("OAUTH_CONFIG_INVALID", "oauth client secret not configured")
 		}
 	case "none":
-		if !effective.UsePKCE {
-			return config.OIDCConnectConfig{}, infraerrors.InternalServer("OAUTH_CONFIG_INVALID", "oauth pkce must be enabled when token_auth_method=none")
-		}
 	default:
 		return config.OIDCConnectConfig{}, infraerrors.InternalServer("OAUTH_CONFIG_INVALID", "oauth token_auth_method invalid")
 	}

@@ -15,9 +15,9 @@ type Model struct {
 
 // DefaultModels OpenAI models list
 var DefaultModels = []Model{
+	{ID: "gpt-5.5", Object: "model", Created: 1776873600, OwnedBy: "openai", Type: "model", DisplayName: "GPT-5.5"},
 	{ID: "gpt-5.4", Object: "model", Created: 1738368000, OwnedBy: "openai", Type: "model", DisplayName: "GPT-5.4"},
 	{ID: "gpt-5.4-mini", Object: "model", Created: 1738368000, OwnedBy: "openai", Type: "model", DisplayName: "GPT-5.4 Mini"},
-	{ID: "gpt-5.4-nano", Object: "model", Created: 1738368000, OwnedBy: "openai", Type: "model", DisplayName: "GPT-5.4 Nano"},
 	{ID: "gpt-5.3-codex", Object: "model", Created: 1735689600, OwnedBy: "openai", Type: "model", DisplayName: "GPT-5.3 Codex"},
 	{ID: "gpt-5.3-codex-spark", Object: "model", Created: 1735689600, OwnedBy: "openai", Type: "model", DisplayName: "GPT-5.3 Codex Spark"},
 	{ID: "gpt-5.2", Object: "model", Created: 1733875200, OwnedBy: "openai", Type: "model", DisplayName: "GPT-5.2"},
@@ -31,6 +31,10 @@ var DefaultModels = []Model{
 	{ID: "text-embedding-3-small", Object: "model", Created: 1705948800, OwnedBy: "openai", Type: "model", DisplayName: "Text Embedding 3 Small"},
 	{ID: "text-embedding-3-large", Object: "model", Created: 1705948800, OwnedBy: "openai", Type: "model", DisplayName: "Text Embedding 3 Large"},
 	{ID: "text-embedding-ada-002", Object: "model", Created: 1671062400, OwnedBy: "openai", Type: "model", DisplayName: "Text Embedding Ada 002"},
+	// Image models
+	{ID: "gpt-image-1", Object: "model", Created: 1733875200, OwnedBy: "openai", Type: "model", DisplayName: "GPT Image 1"},
+	{ID: "gpt-image-1.5", Object: "model", Created: 1735689600, OwnedBy: "openai", Type: "model", DisplayName: "GPT Image 1.5"},
+	{ID: "gpt-image-2", Object: "model", Created: 1738368000, OwnedBy: "openai", Type: "model", DisplayName: "GPT Image 2"},
 }
 
 // DefaultModelIDs returns the default model ID list
@@ -43,7 +47,7 @@ func DefaultModelIDs() []string {
 }
 
 // DefaultTestModel default model for testing OpenAI accounts
-const DefaultTestModel = "gpt-5.1-codex"
+const DefaultTestModel = "gpt-5.4"
 
 // DefaultInstructions default instructions for non-Codex CLI requests
 // Content loaded from instructions.txt at compile time

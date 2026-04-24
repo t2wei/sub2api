@@ -28,7 +28,7 @@ const (
 
 // DefaultCSPPolicy is the default Content-Security-Policy with nonce support
 // __CSP_NONCE__ will be replaced with actual nonce at request time by the SecurityHeaders middleware
-const DefaultCSPPolicy = "default-src 'self'; script-src 'self' __CSP_NONCE__ https://challenges.cloudflare.com https://static.cloudflareinsights.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: https:; font-src 'self' data: https://fonts.gstatic.com; connect-src 'self' https:; frame-src https://challenges.cloudflare.com; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+const DefaultCSPPolicy = "default-src 'self'; script-src 'self' __CSP_NONCE__ https://challenges.cloudflare.com https://static.cloudflareinsights.com https://*.stripe.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: https:; font-src 'self' data: https://fonts.gstatic.com; connect-src 'self' https:; frame-src https://challenges.cloudflare.com https://*.stripe.com; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
 
 // UMQ（用户消息队列）模式常量
 const (
@@ -52,6 +52,11 @@ const (
 	ConnectionPoolIsolationAccountProxy = "account_proxy"
 )
 
+// DefaultUpstreamResponseReadMaxBytes 上游非流式响应体的默认读取上限。
+// 128 MB 可容纳 2-3 张 4K PNG（base64 膨胀 33%，单张 4K PNG 最坏约 67MB base64）。
+// 可通过 gateway.upstream_response_read_max_bytes 配置项覆盖。
+const DefaultUpstreamResponseReadMaxBytes int64 = 128 * 1024 * 1024
+
 type Config struct {
 	Server                  ServerConfig                  `mapstructure:"server"`
 	Log                     LogConfig                     `mapstructure:"log"`
@@ -65,7 +70,6 @@ type Config struct {
 	JWT                     JWTConfig                     `mapstructure:"jwt"`
 	Totp                    TotpConfig                    `mapstructure:"totp"`
 	LinuxDo                 LinuxDoConnectConfig          `mapstructure:"linuxdo_connect"`
-	OxSci                   OxSciOAuthConfig              `mapstructure:"oxsci_oauth"`
 	OIDC                    OIDCConnectConfig             `mapstructure:"oidc_connect"`
 	Default                 DefaultConfig                 `mapstructure:"default"`
 	RateLimit               RateLimitConfig               `mapstructure:"rate_limit"`
@@ -187,22 +191,6 @@ type LinuxDoConnectConfig struct {
 	UserInfoUsernamePath string `mapstructure:"userinfo_username_path"`
 }
 
-// OxSciOAuthConfig OxSci OAuth2 登录配置
-// 用于与 OxSci 生态系统集成，实现统一用户认证
-type OxSciOAuthConfig struct {
-	Enabled             bool   `mapstructure:"enabled"`
-	ClientID            string `mapstructure:"client_id"`
-	ClientSecret        string `mapstructure:"client_secret"`
-	AuthorizeURL        string `mapstructure:"authorize_url"`         // BFF 授权页面 URL
-	TokenURL            string `mapstructure:"token_url"`             // data-service Token 端点
-	UserInfoURL         string `mapstructure:"userinfo_url"`          // data-service UserInfo 端点
-	Scopes              string `mapstructure:"scopes"`                // 默认: "openid profile email"
-	RedirectURL         string `mapstructure:"redirect_url"`          // 后端回调地址
-	FrontendRedirectURL string `mapstructure:"frontend_redirect_url"` // 前端接收 token 的路由
-	UsePKCE             bool   `mapstructure:"use_pkce"`              // 是否使用 PKCE（推荐开启）
-	APIKey              string `mapstructure:"api_key"`               // [OXSCI] API Key for Lambda Proxy access
-}
-
 // LLMLoggingConfig LLM 调用日志配置
 // [OXSCI] 用于记录 LLM 调用日志到 data-service
 type LLMLoggingConfig struct {
@@ -214,31 +202,41 @@ type LLMLoggingConfig struct {
 }
 
 type OIDCConnectConfig struct {
-	Enabled              bool   `mapstructure:"enabled"`
-	ProviderName         string `mapstructure:"provider_name"` // 显示名: "Keycloak" 等
-	ClientID             string `mapstructure:"client_id"`
-	ClientSecret         string `mapstructure:"client_secret"`
-	IssuerURL            string `mapstructure:"issuer_url"`
-	DiscoveryURL         string `mapstructure:"discovery_url"`
-	AuthorizeURL         string `mapstructure:"authorize_url"`
-	TokenURL             string `mapstructure:"token_url"`
-	UserInfoURL          string `mapstructure:"userinfo_url"`
-	JWKSURL              string `mapstructure:"jwks_url"`
-	Scopes               string `mapstructure:"scopes"`                // 默认 "openid email profile"
-	RedirectURL          string `mapstructure:"redirect_url"`          // 后端回调地址（需在提供方后台登记）
-	FrontendRedirectURL  string `mapstructure:"frontend_redirect_url"` // 前端接收 token 的路由（默认：/auth/oidc/callback）
-	TokenAuthMethod      string `mapstructure:"token_auth_method"`     // client_secret_post / client_secret_basic / none
-	UsePKCE              bool   `mapstructure:"use_pkce"`
-	ValidateIDToken      bool   `mapstructure:"validate_id_token"`
-	AllowedSigningAlgs   string `mapstructure:"allowed_signing_algs"`   // 默认 "RS256,ES256,PS256"
-	ClockSkewSeconds     int    `mapstructure:"clock_skew_seconds"`     // 默认 120
-	RequireEmailVerified bool   `mapstructure:"require_email_verified"` // 默认 false
+	Enabled                 bool   `mapstructure:"enabled"`
+	ProviderName            string `mapstructure:"provider_name"` // 显示名: "Keycloak" 等
+	ClientID                string `mapstructure:"client_id"`
+	ClientSecret            string `mapstructure:"client_secret"`
+	IssuerURL               string `mapstructure:"issuer_url"`
+	DiscoveryURL            string `mapstructure:"discovery_url"`
+	AuthorizeURL            string `mapstructure:"authorize_url"`
+	TokenURL                string `mapstructure:"token_url"`
+	UserInfoURL             string `mapstructure:"userinfo_url"`
+	JWKSURL                 string `mapstructure:"jwks_url"`
+	Scopes                  string `mapstructure:"scopes"`                // 默认 "openid email profile"
+	RedirectURL             string `mapstructure:"redirect_url"`          // 后端回调地址（需在提供方后台登记）
+	FrontendRedirectURL     string `mapstructure:"frontend_redirect_url"` // 前端接收 token 的路由（默认：/auth/oidc/callback）
+	TokenAuthMethod         string `mapstructure:"token_auth_method"`     // client_secret_post / client_secret_basic / none
+	UsePKCE                 bool   `mapstructure:"use_pkce"`
+	ValidateIDToken         bool   `mapstructure:"validate_id_token"`
+	UsePKCEExplicit         bool   `mapstructure:"-" yaml:"-"`
+	ValidateIDTokenExplicit bool   `mapstructure:"-" yaml:"-"`
+	AllowedSigningAlgs      string `mapstructure:"allowed_signing_algs"`   // 默认 "RS256,ES256,PS256"
+	ClockSkewSeconds        int    `mapstructure:"clock_skew_seconds"`     // 默认 120
+	RequireEmailVerified    bool   `mapstructure:"require_email_verified"` // 默认 false
 
 	// 可选：用于从 userinfo JSON 中提取字段的 gjson 路径。
 	// 为空时，服务端会尝试一组常见字段名。
 	UserInfoEmailPath    string `mapstructure:"userinfo_email_path"`
 	UserInfoIDPath       string `mapstructure:"userinfo_id_path"`
 	UserInfoUsernamePath string `mapstructure:"userinfo_username_path"`
+}
+
+func hasExplicitConfigOrEnv(configKey, envKey string) bool {
+	if viper.InConfig(configKey) {
+		return true
+	}
+	_, ok := os.LookupEnv(envKey)
+	return ok
 }
 
 // TokenRefreshConfig OAuth token自动刷新配置
@@ -1035,15 +1033,6 @@ func load(allowMissingJWTSecret bool) (*Config, error) {
 	cfg.LinuxDo.UserInfoEmailPath = strings.TrimSpace(cfg.LinuxDo.UserInfoEmailPath)
 	cfg.LinuxDo.UserInfoIDPath = strings.TrimSpace(cfg.LinuxDo.UserInfoIDPath)
 	cfg.LinuxDo.UserInfoUsernamePath = strings.TrimSpace(cfg.LinuxDo.UserInfoUsernamePath)
-	cfg.OxSci.ClientID = strings.TrimSpace(cfg.OxSci.ClientID)
-	cfg.OxSci.ClientSecret = strings.TrimSpace(cfg.OxSci.ClientSecret)
-	cfg.OxSci.AuthorizeURL = strings.TrimSpace(cfg.OxSci.AuthorizeURL)
-	cfg.OxSci.TokenURL = strings.TrimSpace(cfg.OxSci.TokenURL)
-	cfg.OxSci.UserInfoURL = strings.TrimSpace(cfg.OxSci.UserInfoURL)
-	cfg.OxSci.Scopes = strings.TrimSpace(cfg.OxSci.Scopes)
-	cfg.OxSci.RedirectURL = strings.TrimSpace(cfg.OxSci.RedirectURL)
-	cfg.OxSci.FrontendRedirectURL = strings.TrimSpace(cfg.OxSci.FrontendRedirectURL)
-
 	cfg.OIDC.ProviderName = strings.TrimSpace(cfg.OIDC.ProviderName)
 	cfg.OIDC.ClientID = strings.TrimSpace(cfg.OIDC.ClientID)
 	cfg.OIDC.ClientSecret = strings.TrimSpace(cfg.OIDC.ClientSecret)
@@ -1061,6 +1050,8 @@ func load(allowMissingJWTSecret bool) (*Config, error) {
 	cfg.OIDC.UserInfoEmailPath = strings.TrimSpace(cfg.OIDC.UserInfoEmailPath)
 	cfg.OIDC.UserInfoIDPath = strings.TrimSpace(cfg.OIDC.UserInfoIDPath)
 	cfg.OIDC.UserInfoUsernamePath = strings.TrimSpace(cfg.OIDC.UserInfoUsernamePath)
+	cfg.OIDC.UsePKCEExplicit = hasExplicitConfigOrEnv("oidc_connect.use_pkce", "OIDC_CONNECT_USE_PKCE")
+	cfg.OIDC.ValidateIDTokenExplicit = hasExplicitConfigOrEnv("oidc_connect.validate_id_token", "OIDC_CONNECT_VALIDATE_ID_TOKEN")
 	cfg.Dashboard.KeyPrefix = strings.TrimSpace(cfg.Dashboard.KeyPrefix)
 	cfg.CORS.AllowedOrigins = normalizeStringSlice(cfg.CORS.AllowedOrigins)
 	cfg.Security.ResponseHeaders.AdditionalAllowed = normalizeStringSlice(cfg.Security.ResponseHeaders.AdditionalAllowed)
@@ -1239,18 +1230,6 @@ func setDefaults() {
 	viper.SetDefault("linuxdo_connect.userinfo_id_path", "")
 	viper.SetDefault("linuxdo_connect.userinfo_username_path", "")
 
-	// OxSci OAuth2 登录（与 OxSci 生态系统集成）
-	viper.SetDefault("oxsci_oauth.enabled", false)
-	viper.SetDefault("oxsci_oauth.client_id", "")
-	viper.SetDefault("oxsci_oauth.client_secret", "")
-	viper.SetDefault("oxsci_oauth.authorize_url", "")  // BFF 授权页面，如 https://bff.oxsci.ai/oauth/authorize
-	viper.SetDefault("oxsci_oauth.token_url", "")      // data-service Token 端点，如 http://data-service:8001/oauth/token
-	viper.SetDefault("oxsci_oauth.userinfo_url", "")   // data-service UserInfo 端点，如 http://data-service:8001/oauth/userinfo
-	viper.SetDefault("oxsci_oauth.scopes", "openid profile email")
-	viper.SetDefault("oxsci_oauth.redirect_url", "")   // 后端回调地址
-	viper.SetDefault("oxsci_oauth.frontend_redirect_url", "/auth/oxsci/callback")
-	viper.SetDefault("oxsci_oauth.use_pkce", true)     // 推荐使用 PKCE
-
 	// Generic OIDC OAuth 登录
 	viper.SetDefault("oidc_connect.enabled", false)
 	viper.SetDefault("oidc_connect.provider_name", "OIDC")
@@ -1266,7 +1245,7 @@ func setDefaults() {
 	viper.SetDefault("oidc_connect.redirect_url", "")
 	viper.SetDefault("oidc_connect.frontend_redirect_url", "/auth/oidc/callback")
 	viper.SetDefault("oidc_connect.token_auth_method", "client_secret_post")
-	viper.SetDefault("oidc_connect.use_pkce", false)
+	viper.SetDefault("oidc_connect.use_pkce", true)
 	viper.SetDefault("oidc_connect.validate_id_token", true)
 	viper.SetDefault("oidc_connect.allowed_signing_algs", "RS256,ES256,PS256")
 	viper.SetDefault("oidc_connect.clock_skew_seconds", 120)
@@ -1456,7 +1435,7 @@ func setDefaults() {
 	viper.SetDefault("gateway.antigravity_fallback_cooldown_minutes", 1)
 	viper.SetDefault("gateway.antigravity_extra_retries", 10)
 	viper.SetDefault("gateway.max_body_size", int64(256*1024*1024))
-	viper.SetDefault("gateway.upstream_response_read_max_bytes", int64(8*1024*1024))
+	viper.SetDefault("gateway.upstream_response_read_max_bytes", DefaultUpstreamResponseReadMaxBytes)
 	viper.SetDefault("gateway.proxy_probe_response_read_max_bytes", int64(1024*1024))
 	viper.SetDefault("gateway.gemini_debug_response_headers", false)
 	viper.SetDefault("gateway.connection_pool_isolation", ConnectionPoolIsolationAccountProxy)
@@ -1678,9 +1657,6 @@ func (c *Config) Validate() error {
 		default:
 			return fmt.Errorf("linuxdo_connect.token_auth_method must be one of: client_secret_post/client_secret_basic/none")
 		}
-		if method == "none" && !c.LinuxDo.UsePKCE {
-			return fmt.Errorf("linuxdo_connect.use_pkce must be true when linuxdo_connect.token_auth_method=none")
-		}
 		if (method == "" || method == "client_secret_post" || method == "client_secret_basic") &&
 			strings.TrimSpace(c.LinuxDo.ClientSecret) == "" {
 			return fmt.Errorf("linuxdo_connect.client_secret is required when linuxdo_connect.enabled=true and token_auth_method is client_secret_post/client_secret_basic")
@@ -1711,51 +1687,6 @@ func (c *Config) Validate() error {
 		warnIfInsecureURL("linuxdo_connect.redirect_url", c.LinuxDo.RedirectURL)
 		warnIfInsecureURL("linuxdo_connect.frontend_redirect_url", c.LinuxDo.FrontendRedirectURL)
 	}
-	// OxSci OAuth2 验证
-	if c.OxSci.Enabled {
-		if c.OxSci.ClientID == "" {
-			return fmt.Errorf("oxsci_oauth.client_id is required when oxsci_oauth.enabled=true")
-		}
-		if c.OxSci.AuthorizeURL == "" {
-			return fmt.Errorf("oxsci_oauth.authorize_url is required when oxsci_oauth.enabled=true")
-		}
-		if c.OxSci.TokenURL == "" {
-			return fmt.Errorf("oxsci_oauth.token_url is required when oxsci_oauth.enabled=true")
-		}
-		if c.OxSci.UserInfoURL == "" {
-			return fmt.Errorf("oxsci_oauth.userinfo_url is required when oxsci_oauth.enabled=true")
-		}
-		if c.OxSci.RedirectURL == "" {
-			return fmt.Errorf("oxsci_oauth.redirect_url is required when oxsci_oauth.enabled=true")
-		}
-		if c.OxSci.FrontendRedirectURL == "" {
-			return fmt.Errorf("oxsci_oauth.frontend_redirect_url is required when oxsci_oauth.enabled=true")
-		}
-		// 非 PKCE 模式需要 client_secret
-		if !c.OxSci.UsePKCE && c.OxSci.ClientSecret == "" {
-			return fmt.Errorf("oxsci_oauth.client_secret is required when oxsci_oauth.enabled=true and use_pkce=false")
-		}
-		if err := ValidateAbsoluteHTTPURL(c.OxSci.AuthorizeURL); err != nil {
-			return fmt.Errorf("oxsci_oauth.authorize_url invalid: %w", err)
-		}
-		if err := ValidateAbsoluteHTTPURL(c.OxSci.TokenURL); err != nil {
-			return fmt.Errorf("oxsci_oauth.token_url invalid: %w", err)
-		}
-		if err := ValidateAbsoluteHTTPURL(c.OxSci.UserInfoURL); err != nil {
-			return fmt.Errorf("oxsci_oauth.userinfo_url invalid: %w", err)
-		}
-		if err := ValidateAbsoluteHTTPURL(c.OxSci.RedirectURL); err != nil {
-			return fmt.Errorf("oxsci_oauth.redirect_url invalid: %w", err)
-		}
-		if err := ValidateFrontendRedirectURL(c.OxSci.FrontendRedirectURL); err != nil {
-			return fmt.Errorf("oxsci_oauth.frontend_redirect_url invalid: %w", err)
-		}
-		warnIfInsecureURL("oxsci_oauth.authorize_url", c.OxSci.AuthorizeURL)
-		warnIfInsecureURL("oxsci_oauth.token_url", c.OxSci.TokenURL)
-		warnIfInsecureURL("oxsci_oauth.userinfo_url", c.OxSci.UserInfoURL)
-	}
-
-	// OIDC 验证
 	if c.OIDC.Enabled {
 		if strings.TrimSpace(c.OIDC.ClientID) == "" {
 			return fmt.Errorf("oidc_connect.client_id is required when oidc_connect.enabled=true")
@@ -1778,9 +1709,6 @@ func (c *Config) Validate() error {
 		case "", "client_secret_post", "client_secret_basic", "none":
 		default:
 			return fmt.Errorf("oidc_connect.token_auth_method must be one of: client_secret_post/client_secret_basic/none")
-		}
-		if method == "none" && !c.OIDC.UsePKCE {
-			return fmt.Errorf("oidc_connect.use_pkce must be true when oidc_connect.token_auth_method=none")
 		}
 		if (method == "" || method == "client_secret_post" || method == "client_secret_basic") &&
 			strings.TrimSpace(c.OIDC.ClientSecret) == "" {

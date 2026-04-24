@@ -34,35 +34,39 @@ func ProvideAdminHandlers(
 	apiKeyHandler *admin.AdminAPIKeyHandler,
 	scheduledTestHandler *admin.ScheduledTestHandler,
 	channelHandler *admin.ChannelHandler,
+	channelMonitorHandler *admin.ChannelMonitorHandler,
+	channelMonitorTemplateHandler *admin.ChannelMonitorRequestTemplateHandler,
 	paymentHandler *admin.PaymentHandler,
 ) *AdminHandlers {
 	return &AdminHandlers{
-		Dashboard:             dashboardHandler,
-		User:                  userHandler,
-		Group:                 groupHandler,
-		Account:               accountHandler,
-		Announcement:          announcementHandler,
-		DataManagement:        dataManagementHandler,
-		Backup:                backupHandler,
-		OAuth:                 oauthHandler,
-		OpenAIOAuth:           openaiOAuthHandler,
-		GeminiOAuth:           geminiOAuthHandler,
-		AntigravityOAuth:      antigravityOAuthHandler,
-		Proxy:                 proxyHandler,
-		Redeem:                redeemHandler,
-		Promo:                 promoHandler,
-		Setting:               settingHandler,
-		Ops:                   opsHandler,
-		System:                systemHandler,
-		Subscription:          subscriptionHandler,
-		Usage:                 usageHandler,
-		UserAttribute:         userAttributeHandler,
-		ErrorPassthrough:      errorPassthroughHandler,
-		TLSFingerprintProfile: tlsFingerprintProfileHandler,
-		APIKey:                apiKeyHandler,
-		ScheduledTest:         scheduledTestHandler,
-		Channel:               channelHandler,
-		Payment:               paymentHandler,
+		Dashboard:              dashboardHandler,
+		User:                   userHandler,
+		Group:                  groupHandler,
+		Account:                accountHandler,
+		Announcement:           announcementHandler,
+		DataManagement:         dataManagementHandler,
+		Backup:                 backupHandler,
+		OAuth:                  oauthHandler,
+		OpenAIOAuth:            openaiOAuthHandler,
+		GeminiOAuth:            geminiOAuthHandler,
+		AntigravityOAuth:       antigravityOAuthHandler,
+		Proxy:                  proxyHandler,
+		Redeem:                 redeemHandler,
+		Promo:                  promoHandler,
+		Setting:                settingHandler,
+		Ops:                    opsHandler,
+		System:                 systemHandler,
+		Subscription:           subscriptionHandler,
+		Usage:                  usageHandler,
+		UserAttribute:          userAttributeHandler,
+		ErrorPassthrough:       errorPassthroughHandler,
+		TLSFingerprintProfile:  tlsFingerprintProfileHandler,
+		APIKey:                 apiKeyHandler,
+		ScheduledTest:          scheduledTestHandler,
+		Channel:                channelHandler,
+		ChannelMonitor:         channelMonitorHandler,
+		ChannelMonitorTemplate: channelMonitorTemplateHandler,
+		Payment:                paymentHandler,
 	}
 }
 
@@ -76,6 +80,18 @@ func ProvideSettingHandler(settingService *service.SettingService, buildInfo Bui
 	return NewSettingHandler(settingService, buildInfo.Version)
 }
 
+func ProvideUserHandler(
+	userService *service.UserService,
+	authService *service.AuthService,
+	emailService *service.EmailService,
+	emailCache service.EmailCache,
+	affiliateService *service.AffiliateService,
+) *UserHandler {
+	handler := NewUserHandler(userService, authService, emailService, emailCache)
+	handler.SetAffiliateService(affiliateService)
+	return handler
+}
+
 // ProvideHandlers creates the Handlers struct
 func ProvideHandlers(
 	authHandler *AuthHandler,
@@ -85,6 +101,7 @@ func ProvideHandlers(
 	redeemHandler *RedeemHandler,
 	subscriptionHandler *SubscriptionHandler,
 	announcementHandler *AnnouncementHandler,
+	channelMonitorUserHandler *ChannelMonitorUserHandler,
 	adminHandlers *AdminHandlers,
 	gatewayHandler *GatewayHandler,
 	openaiGatewayHandler *OpenAIGatewayHandler,
@@ -92,24 +109,27 @@ func ProvideHandlers(
 	totpHandler *TotpHandler,
 	paymentHandler *PaymentHandler,
 	paymentWebhookHandler *PaymentWebhookHandler,
+	availableChannelHandler *AvailableChannelHandler,
 	_ *service.IdempotencyCoordinator,
 	_ *service.IdempotencyCleanupService,
 ) *Handlers {
 	return &Handlers{
-		Auth:           authHandler,
-		User:           userHandler,
-		APIKey:         apiKeyHandler,
-		Usage:          usageHandler,
-		Redeem:         redeemHandler,
-		Subscription:   subscriptionHandler,
-		Announcement:   announcementHandler,
-		Admin:          adminHandlers,
-		Gateway:        gatewayHandler,
-		OpenAIGateway:  openaiGatewayHandler,
-		Setting:        settingHandler,
-		Totp:           totpHandler,
-		Payment:        paymentHandler,
-		PaymentWebhook: paymentWebhookHandler,
+		Auth:             authHandler,
+		User:             userHandler,
+		APIKey:           apiKeyHandler,
+		Usage:            usageHandler,
+		Redeem:           redeemHandler,
+		Subscription:     subscriptionHandler,
+		Announcement:     announcementHandler,
+		ChannelMonitor:   channelMonitorUserHandler,
+		Admin:            adminHandlers,
+		Gateway:          gatewayHandler,
+		OpenAIGateway:    openaiGatewayHandler,
+		Setting:          settingHandler,
+		Totp:             totpHandler,
+		Payment:          paymentHandler,
+		PaymentWebhook:   paymentWebhookHandler,
+		AvailableChannel: availableChannelHandler,
 	}
 }
 
@@ -117,18 +137,20 @@ func ProvideHandlers(
 var ProviderSet = wire.NewSet(
 	// Top-level handlers
 	NewAuthHandler,
-	NewUserHandler,
+	ProvideUserHandler,
 	NewAPIKeyHandler,
 	NewUsageHandler,
 	NewRedeemHandler,
 	NewSubscriptionHandler,
 	NewAnnouncementHandler,
+	NewChannelMonitorUserHandler,
 	NewGatewayHandler,
 	NewOpenAIGatewayHandler,
 	NewTotpHandler,
 	ProvideSettingHandler,
 	NewPaymentHandler,
 	NewPaymentWebhookHandler,
+	NewAvailableChannelHandler,
 
 	// Admin handlers
 	admin.NewDashboardHandler,
@@ -156,6 +178,8 @@ var ProviderSet = wire.NewSet(
 	admin.NewAdminAPIKeyHandler,
 	admin.NewScheduledTestHandler,
 	admin.NewChannelHandler,
+	admin.NewChannelMonitorHandler,
+	admin.NewChannelMonitorRequestTemplateHandler,
 	admin.NewPaymentHandler,
 
 	// AdminHandlers and Handlers constructors
