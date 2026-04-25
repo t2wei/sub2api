@@ -447,10 +447,18 @@ func (h *AuthHandler) OIDCOAuthCallback(c *gin.Context) {
 		return
 	}
 
-	// Passwordless (SSO-only) users have no way to complete the password-based bind
-	// flow. Since the OIDC authentication itself proves identity, and the real email
-	// matches an existing account with no password, auto-bind without a choice screen.
-	if compatEmailUser != nil && strings.TrimSpace(compatEmailUser.PasswordHash) == "" {
+	if cfg.RequireEmailVerified {
+		if emailVerified == nil || !*emailVerified {
+			redirectOAuthError(c, frontendCallback, "email_not_verified", "email is not verified", "")
+			return
+		}
+	}
+
+	// Auto-bind when the OIDC-verified email matches an existing account.
+	// Since OAuth users get a random bcrypt password they never know, the
+	// password-based bind flow is a dead end for them. A verified email match
+	// from a trusted OIDC provider is sufficient proof of identity.
+	if compatEmailUser != nil && emailVerified != nil && *emailVerified {
 		if err := h.createOAuthPendingSession(c, oauthPendingSessionPayload{
 			Intent:                 oauthIntentLogin,
 			Identity:               identityRef,
@@ -468,13 +476,6 @@ func (h *AuthHandler) OIDCOAuthCallback(c *gin.Context) {
 		}
 		redirectToFrontendCallback(c, frontendCallback)
 		return
-	}
-
-	if cfg.RequireEmailVerified {
-		if emailVerified == nil || !*emailVerified {
-			redirectOAuthError(c, frontendCallback, "email_not_verified", "email is not verified", "")
-			return
-		}
 	}
 
 	if h.isForceEmailOnThirdPartySignup(c.Request.Context()) {
