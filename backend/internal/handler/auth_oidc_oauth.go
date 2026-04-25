@@ -454,30 +454,6 @@ func (h *AuthHandler) OIDCOAuthCallback(c *gin.Context) {
 		}
 	}
 
-	// Auto-bind when the OIDC-verified email matches an existing account.
-	// Since OAuth users get a random bcrypt password they never know, the
-	// password-based bind flow is a dead end for them. A verified email match
-	// from a trusted OIDC provider is sufficient proof of identity.
-	if compatEmailUser != nil && emailVerified != nil && *emailVerified {
-		if err := h.createOAuthPendingSession(c, oauthPendingSessionPayload{
-			Intent:                 oauthIntentLogin,
-			Identity:               identityRef,
-			TargetUserID:           &compatEmailUser.ID,
-			ResolvedEmail:          compatEmailUser.Email,
-			RedirectTo:             redirectTo,
-			BrowserSessionKey:      browserSessionKey,
-			UpstreamIdentityClaims: upstreamClaims,
-			CompletionResponse: map[string]any{
-				"redirect": redirectTo,
-			},
-		}); err != nil {
-			redirectOAuthError(c, frontendCallback, "session_error", "failed to continue oauth login", "")
-			return
-		}
-		redirectToFrontendCallback(c, frontendCallback)
-		return
-	}
-
 	if h.isForceEmailOnThirdPartySignup(c.Request.Context()) {
 		if err := h.createOIDCOAuthChoicePendingSession(
 			c,
