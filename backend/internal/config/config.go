@@ -89,6 +89,7 @@ type Config struct {
 	Gemini                  GeminiConfig                  `mapstructure:"gemini"`
 	Update                  UpdateConfig                  `mapstructure:"update"`
 	Idempotency             IdempotencyConfig             `mapstructure:"idempotency"`
+	LLMLogging              LLMLoggingConfig              `mapstructure:"llm_logging"` // [OXSCI] LLM 调用日志配置
 }
 
 type LogConfig struct {
@@ -457,6 +458,16 @@ func normalizeWeChatConnectConfig(cfg *WeChatConnectConfig) {
 	if cfg.FrontendRedirectURL == "" {
 		cfg.FrontendRedirectURL = defaultWeChatConnectFrontendRedirect
 	}
+}
+
+// LLMLoggingConfig LLM 调用日志配置
+// [OXSCI] 用于记录 LLM 调用日志到 data-service
+type LLMLoggingConfig struct {
+	Enabled        bool   `mapstructure:"enabled"`         // 是否启用 LLM 日志记录
+	URL            string `mapstructure:"url"`             // data-service LLM 日志 API 地址
+	AgentName      string `mapstructure:"agent_name"`      // 代理名称（用于标识日志来源）
+	APIKey         string `mapstructure:"api_key"`         // [OXSCI] API Key for Lambda Proxy access
+	TimeoutSeconds int    `mapstructure:"timeout_seconds"` // HTTP 请求超时时间（秒）
 }
 
 // TokenRefreshConfig OAuth token自动刷新配置
@@ -1279,12 +1290,18 @@ func load(allowMissingJWTSecret bool) (*Config, error) {
 	cfg.Security.ResponseHeaders.AdditionalAllowed = normalizeStringSlice(cfg.Security.ResponseHeaders.AdditionalAllowed)
 	cfg.Security.ResponseHeaders.ForceRemove = normalizeStringSlice(cfg.Security.ResponseHeaders.ForceRemove)
 	cfg.Security.CSP.Policy = strings.TrimSpace(cfg.Security.CSP.Policy)
+	if logLevel := strings.TrimSpace(os.Getenv("SUB2API_LOG_LEVEL")); logLevel != "" {
+		cfg.Log.Level = logLevel
+	}
 	cfg.Log.Level = strings.ToLower(strings.TrimSpace(cfg.Log.Level))
 	cfg.Log.Format = strings.ToLower(strings.TrimSpace(cfg.Log.Format))
 	cfg.Log.ServiceName = strings.TrimSpace(cfg.Log.ServiceName)
 	cfg.Log.Environment = strings.TrimSpace(cfg.Log.Environment)
 	cfg.Log.StacktraceLevel = strings.ToLower(strings.TrimSpace(cfg.Log.StacktraceLevel))
 	cfg.Log.Output.FilePath = strings.TrimSpace(cfg.Log.Output.FilePath)
+	cfg.LLMLogging.URL = strings.TrimSpace(cfg.LLMLogging.URL)
+	cfg.LLMLogging.AgentName = strings.TrimSpace(cfg.LLMLogging.AgentName)
+	cfg.LLMLogging.APIKey = strings.TrimSpace(cfg.LLMLogging.APIKey)
 	cfg.Gateway.ForcedCodexInstructionsTemplateFile = strings.TrimSpace(cfg.Gateway.ForcedCodexInstructionsTemplateFile)
 	if cfg.Gateway.ForcedCodexInstructionsTemplateFile != "" {
 		content, err := os.ReadFile(cfg.Gateway.ForcedCodexInstructionsTemplateFile)
@@ -1394,6 +1411,13 @@ func setDefaults() {
 	viper.SetDefault("log.sampling.enabled", false)
 	viper.SetDefault("log.sampling.initial", 100)
 	viper.SetDefault("log.sampling.thereafter", 100)
+
+	// LLM logging
+	viper.SetDefault("llm_logging.enabled", false)
+	viper.SetDefault("llm_logging.url", "")
+	viper.SetDefault("llm_logging.agent_name", "sub2api")
+	viper.SetDefault("llm_logging.api_key", "")
+	viper.SetDefault("llm_logging.timeout_seconds", 10)
 
 	// CORS
 	viper.SetDefault("cors.allowed_origins", []string{})
