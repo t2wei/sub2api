@@ -88,6 +88,8 @@ func RegisterGatewayRoutes(
 			}
 			h.Gateway.ChatCompletions(c)
 		})
+		// OpenAI Embeddings API
+		gateway.POST("/embeddings", h.OpenAIGateway.Embeddings)
 		gateway.POST("/images/generations", func(c *gin.Context) {
 			if getGroupPlatform(c) != service.PlatformOpenAI {
 				c.JSON(http.StatusNotFound, gin.H{
