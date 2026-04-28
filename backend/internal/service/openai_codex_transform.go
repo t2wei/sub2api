@@ -853,16 +853,17 @@ func filterCodexInput(input []any, preserveReferences bool) []any {
 		}
 		typ, _ := m["type"].(string)
 
-		// 仅修正真正的 tool/function call 标识，避免误改普通 message/reasoning id；
-		// 若 item_reference 指向 legacy call_* 标识，则仅修正该引用本身。
-		fixCallIDPrefix := func(id string) string {
+		// 修复 OpenAI 上游的最新校验："Expected an ID that begins with 'fc'"
+		// 使用 "fc_a_" 前缀而非 "fc_"，避免原始 ID 含 OpenAI 保留前缀
+		// （如 "msg_"）时产生被拒绝的复合 ID（如 "fc_msg_1"）。
+		fixIDPrefix := func(id string) string {
 			if id == "" || strings.HasPrefix(id, "fc") {
 				return id
 			}
 			if strings.HasPrefix(id, "call_") {
 				return "fc" + strings.TrimPrefix(id, "call_")
 			}
-			return "fc_" + id
+			return "fc_a_" + id
 		}
 
 		if typ == "item_reference" {
@@ -874,7 +875,7 @@ func filterCodexInput(input []any, preserveReferences bool) []any {
 				newItem[key] = value
 			}
 			if id, ok := newItem["id"].(string); ok && strings.HasPrefix(id, "call_") {
-				newItem["id"] = fixCallIDPrefix(id)
+				newItem["id"] = fixIDPrefix(id)
 			}
 			filtered = append(filtered, newItem)
 			continue
@@ -905,7 +906,7 @@ func filterCodexInput(input []any, preserveReferences bool) []any {
 			}
 
 			if callID != "" {
-				fixedCallID := fixCallIDPrefix(callID)
+				fixedCallID := fixIDPrefix(callID)
 				if fixedCallID != callID {
 					ensureCopy()
 					newItem["call_id"] = fixedCallID

@@ -284,21 +284,32 @@ func anthropicAssistantToResponses(raw json.RawMessage) ([]ResponsesInputItem, e
 	return items, nil
 }
 
+// responsesCallIDPrefix is the prefix added to Anthropic tool IDs when
+// converting to OpenAI Responses API function_call IDs. We use "fc_a_"
+// instead of bare "fc_" so that the original ID (which may start with
+// an OpenAI-reserved prefix like "msg_") does not produce a composite
+// ID that confuses upstream validation (e.g. "fc_msg_1" is rejected
+// because OpenAI parses "msg_" as a message-ID prefix).
+const responsesCallIDPrefix = "fc_a_"
+
 // toResponsesCallID converts an Anthropic tool ID (toolu_xxx / call_xxx) to a
-// Responses API function_call ID that starts with "fc_".
+// Responses API function_call ID that starts with "fc_a_".
 func toResponsesCallID(id string) string {
 	if strings.HasPrefix(id, "fc_") {
 		return id
 	}
-	return "fc_" + id
+	return responsesCallIDPrefix + id
 }
 
-// fromResponsesCallID reverses toResponsesCallID, stripping the "fc_" prefix
-// that was added during request conversion.
+// fromResponsesCallID reverses toResponsesCallID, stripping the "fc_a_"
+// prefix that was added during request conversion.
 func fromResponsesCallID(id string) string {
+	if after, ok := strings.CutPrefix(id, responsesCallIDPrefix); ok {
+		return after
+	}
+	// Legacy compat: also try stripping bare "fc_" for IDs that were
+	// generated before the prefix change.
 	if after, ok := strings.CutPrefix(id, "fc_"); ok {
-		// Only strip if the remainder doesn't look like it was already "fc_" prefixed.
-		// E.g. "fc_toolu_xxx" → "toolu_xxx", "fc_call_xxx" → "call_xxx"
 		if strings.HasPrefix(after, "toolu_") || strings.HasPrefix(after, "call_") {
 			return after
 		}

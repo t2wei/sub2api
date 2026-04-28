@@ -13,7 +13,7 @@ func TestApplyCodexOAuthTransform_ToolContinuationPreservesInput(t *testing.T) {
 		"model": "gpt-5.2",
 		"input": []any{
 			map[string]any{"type": "item_reference", "id": "ref1", "text": "x"},
-			map[string]any{"type": "function_call_output", "call_id": "call_1", "output": "ok", "id": "o1"},
+			map[string]any{"type": "function_call_output", "call_id": "msg_1", "output": "ok", "id": "o1"},
 		},
 		"tool_choice": "auto",
 	}
@@ -39,7 +39,7 @@ func TestApplyCodexOAuthTransform_ToolContinuationPreservesInput(t *testing.T) {
 	second, ok := input[1].(map[string]any)
 	require.True(t, ok)
 	require.Equal(t, "o1", second["id"])
-	require.Equal(t, "fc1", second["call_id"])
+	require.Equal(t, "fc_a_msg_1", second["call_id"])
 }
 
 func TestApplyCodexOAuthTransform_ToolContinuationPreservesNativeMessageAndReasoningIDs(t *testing.T) {
