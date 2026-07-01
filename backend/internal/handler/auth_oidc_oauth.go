@@ -14,6 +14,7 @@ import (
 	"log"
 	"math/big"
 	"net/http"
+	"net/mail"
 	"net/url"
 	"strconv"
 	"strings"
@@ -90,6 +91,7 @@ type oidcUserInfoClaims struct {
 	Username      string
 	Subject       string
 	EmailVerified *bool
+	InOxSciOrg    *bool
 	DisplayName   string
 	AvatarURL     string
 }
@@ -356,7 +358,14 @@ func (h *AuthHandler) OIDCOAuthCallback(c *gin.Context) {
 	if compatEmail == "" && idClaims != nil {
 		compatEmail = strings.TrimSpace(idClaims.Email)
 	}
-	email := oidcSyntheticEmailFromIdentityKey(identityKey)
+	compatEmail = oidcNormalizeEmailClaim(compatEmail)
+	trustedOrgEmail := strings.TrimSpace(compatEmail) != "" && oidcInOxSciOrg(userInfoClaims)
+	effectiveEmailVerified := emailVerified != nil && *emailVerified
+	if trustedOrgEmail {
+		effectiveEmailVerified = true
+	}
+	syntheticEmail := oidcSyntheticEmailFromIdentityKey(identityKey)
+	email := firstNonEmpty(compatEmail, syntheticEmail)
 	username := firstNonEmpty(
 		userInfoClaims.Username,
 		func() string {
@@ -379,12 +388,13 @@ func (h *AuthHandler) OIDCOAuthCallback(c *gin.Context) {
 		ProviderSubject: subject,
 	}
 	upstreamClaims := map[string]any{
-		"email":             email,
-		"username":          username,
-		"subject":           subject,
-		"issuer":            issuer,
-		"email_verified":    emailVerified != nil && *emailVerified,
-		"provider_fallback": strings.TrimSpace(cfg.ProviderName),
+		"email":                   email,
+		"username":                username,
+		"subject":                 subject,
+		"issuer":                  issuer,
+		"email_verified":          effectiveEmailVerified,
+		"upstream_email_verified": emailVerified != nil && *emailVerified,
+		"provider_fallback":       strings.TrimSpace(cfg.ProviderName),
 		"suggested_display_name": firstNonEmpty(userInfoClaims.DisplayName, func() string {
 			if idClaims != nil {
 				return idClaims.Name
@@ -393,9 +403,30 @@ func (h *AuthHandler) OIDCOAuthCallback(c *gin.Context) {
 		}(), username),
 		"suggested_avatar_url": userInfoClaims.AvatarURL,
 	}
-	if compatEmail != "" && !strings.EqualFold(strings.TrimSpace(compatEmail), strings.TrimSpace(email)) {
-		upstreamClaims["compat_email"] = compatEmail
+	if userInfoClaims.InOxSciOrg != nil {
+		upstreamClaims["in_oxsci_org"] = *userInfoClaims.InOxSciOrg
 	}
+	if trustedOrgEmail {
+		upstreamClaims["trusted_org"] = true
+	}
+	if syntheticEmail != "" && !strings.EqualFold(strings.TrimSpace(syntheticEmail), strings.TrimSpace(email)) {
+		upstreamClaims["synthetic_email"] = syntheticEmail
+	}
+	if compatEmail != "" {
+		upstreamClaims["compat_email"] = compatEmail
+		upstreamClaims["claimed_email"] = compatEmail
+	}
+
+	if !oidcInOxSciOrg(userInfoClaims) {
+		if userInfoClaims.InOxSciOrg == nil {
+			log.Printf("[OIDC OAuth] rejected login because userinfo.in_oxsci_org is missing: issuer=%q subject=%q email=%q", issuer, subject, compatEmail)
+		} else {
+			log.Printf("[OIDC OAuth] rejected login because userinfo.in_oxsci_org is false: issuer=%q subject=%q email=%q", issuer, subject, compatEmail)
+		}
+		redirectOAuthError(c, frontendCallback, "org_not_allowed", "account is not in XSci organization", "userinfo in_oxsci_org must be true")
+		return
+	}
+
 	if intent == oauthIntentBindCurrentUser {
 		targetUserID, err := h.readOAuthBindUserIDFromCookie(c, oidcOAuthBindUserCookieName)
 		if err != nil {
@@ -453,35 +484,72 @@ func (h *AuthHandler) OIDCOAuthCallback(c *gin.Context) {
 	}
 
 	if cfg.RequireEmailVerified {
-		if emailVerified == nil || !*emailVerified {
+		if !effectiveEmailVerified {
 			redirectOAuthError(c, frontendCallback, "email_not_verified", "email is not verified", "")
 			return
 		}
 	}
 
-	// 快捷路径：当上游返回已验证邮箱、部署不要求额外确认且本地没有同邮箱账号时，
-	// 直接信任上游身份完成注册/登录，避免展示 choice 页。
-	if compatEmailUser == nil &&
-		strings.TrimSpace(compatEmail) != "" &&
-		emailVerified != nil && *emailVerified {
-		if handled := h.tryOIDCVerifiedEmailFastPath(
-			c,
-			frontendCallback,
-			redirectTo,
-			identityRef,
-			compatEmail,
-			username,
-			upstreamClaims,
-		); handled {
+	forceEmailOnSignup := h.isForceEmailOnThirdPartySignup(c.Request.Context())
+	if (!forceEmailOnSignup || trustedOrgEmail) && oidcCanAutoCompleteLogin(email, effectiveEmailVerified) {
+		if trustedOrgEmail {
+			if handled := h.tryOIDCVerifiedEmailFastPath(
+				c,
+				frontendCallback,
+				redirectTo,
+				identityRef,
+				compatEmail,
+				username,
+				upstreamClaims,
+				true,
+			); handled {
+				return
+			}
+		}
+
+		if compatEmailUser != nil {
+			if err := h.createOIDCOAuthChoicePendingSession(
+				c,
+				identityRef,
+				firstNonEmpty(compatEmail, email),
+				email,
+				redirectTo,
+				browserSessionKey,
+				upstreamClaims,
+				compatEmail,
+				compatEmailUser,
+				false,
+			); err != nil {
+				redirectOAuthError(c, frontendCallback, "session_error", "failed to continue oauth login", "")
+				return
+			}
+			redirectToFrontendCallback(c, frontendCallback)
 			return
+		}
+
+		// 快捷路径：当上游返回已验证邮箱、部署不要求额外确认且本地没有同邮箱账号时，
+		// 直接信任上游身份完成注册/登录，避免展示 choice 页。
+		if strings.TrimSpace(compatEmail) != "" && emailVerified != nil && *emailVerified {
+			if handled := h.tryOIDCVerifiedEmailFastPath(
+				c,
+				frontendCallback,
+				redirectTo,
+				identityRef,
+				compatEmail,
+				username,
+				upstreamClaims,
+				false,
+			); handled {
+				return
+			}
 		}
 	}
 
-	if h.isForceEmailOnThirdPartySignup(c.Request.Context()) {
+	if forceEmailOnSignup {
 		if err := h.createOIDCOAuthChoicePendingSession(
 			c,
 			identityRef,
-			email,
+			firstNonEmpty(compatEmail, email),
 			email,
 			redirectTo,
 			browserSessionKey,
@@ -500,14 +568,14 @@ func (h *AuthHandler) OIDCOAuthCallback(c *gin.Context) {
 	if err := h.createOIDCOAuthChoicePendingSession(
 		c,
 		identityRef,
-		email,
+		firstNonEmpty(compatEmail, email),
 		email,
 		redirectTo,
 		browserSessionKey,
 		upstreamClaims,
 		compatEmail,
 		compatEmailUser,
-		h.isForceEmailOnThirdPartySignup(c.Request.Context()),
+		forceEmailOnSignup,
 	); err != nil {
 		redirectOAuthError(c, frontendCallback, "session_error", "failed to continue oauth login", "")
 		return
@@ -604,11 +672,90 @@ func (h *AuthHandler) createOIDCOAuthChoicePendingSession(
 	})
 }
 
+func (h *AuthHandler) createOIDCDirectExistingUserPendingSession(
+	c *gin.Context,
+	identity service.PendingAuthIdentityKey,
+	targetUser *dbent.User,
+	redirectTo string,
+	browserSessionKey string,
+	upstreamClaims map[string]any,
+) error {
+	if targetUser == nil || targetUser.ID <= 0 {
+		return infraerrors.BadRequest("PENDING_AUTH_TARGET_USER_MISSING", "pending auth target user is missing")
+	}
+	if !strings.EqualFold(strings.TrimSpace(targetUser.Status), service.StatusActive) {
+		return service.ErrUserNotActive
+	}
+
+	session, err := h.createOAuthPendingSessionEntity(c, oauthPendingSessionPayload{
+		Intent:                 oauthIntentLogin,
+		Identity:               identity,
+		TargetUserID:           &targetUser.ID,
+		ResolvedEmail:          strings.TrimSpace(targetUser.Email),
+		RedirectTo:             redirectTo,
+		BrowserSessionKey:      browserSessionKey,
+		UpstreamIdentityClaims: upstreamClaims,
+		CompletionResponse: map[string]any{
+			"redirect": redirectTo,
+		},
+	})
+	if err != nil {
+		return err
+	}
+
+	return applyPendingOAuthBinding(
+		c.Request.Context(),
+		h.entClient(),
+		h.authService,
+		h.userService,
+		session,
+		nil,
+		&targetUser.ID,
+		true,
+		true,
+	)
+}
+
+func (h *AuthHandler) createOIDCAutoRegistrationPendingSession(
+	c *gin.Context,
+	identity service.PendingAuthIdentityKey,
+	email string,
+	redirectTo string,
+	browserSessionKey string,
+	upstreamClaims map[string]any,
+) error {
+	completionResponse := map[string]any{
+		"redirect": redirectTo,
+	}
+	if h.authService != nil && h.authService.IsInvitationCodeEnabled(c.Request.Context()) {
+		completionResponse["error"] = "invitation_required"
+	} else {
+		completionResponse["auto_complete_registration"] = true
+	}
+
+	return h.createOAuthPendingSession(c, oauthPendingSessionPayload{
+		Intent:                 oauthIntentLogin,
+		Identity:               identity,
+		ResolvedEmail:          strings.TrimSpace(email),
+		RedirectTo:             redirectTo,
+		BrowserSessionKey:      browserSessionKey,
+		UpstreamIdentityClaims: upstreamClaims,
+		CompletionResponse:     completionResponse,
+	})
+}
+
 type completeOIDCOAuthRequest struct {
 	InvitationCode   string `json:"invitation_code" binding:"required"`
 	AffCode          string `json:"aff_code,omitempty"`
 	AdoptDisplayName *bool  `json:"adopt_display_name,omitempty"`
 	AdoptAvatar      *bool  `json:"adopt_avatar,omitempty"`
+}
+
+func (r completeOIDCOAuthRequest) adoptionDecision() oauthAdoptionDecisionRequest {
+	return oauthAdoptionDecisionRequest{
+		AdoptDisplayName: r.AdoptDisplayName,
+		AdoptAvatar:      r.AdoptAvatar,
+	}
 }
 
 // CompleteOIDCOAuthRegistration completes a pending OAuth registration by validating
@@ -648,18 +795,36 @@ func (h *AuthHandler) CompleteOIDCOAuthRegistration(c *gin.Context) {
 		response.ErrorFrom(c, err)
 		return
 	}
+	clearCookies := func() {
+		clearOAuthPendingSessionCookie(c, secureCookie)
+		clearOAuthPendingBrowserCookie(c, secureCookie)
+	}
+	payload, _ := readCompletionResponse(session.LocalFlowState)
+	skipLegacyEmailGate := pendingSessionWantsInvitation(payload) && !h.isForceEmailOnThirdPartySignup(c.Request.Context())
+	h.completeOIDCOAuthRegistrationSession(c, session, req, skipLegacyEmailGate, clearCookies)
+}
+
+func (h *AuthHandler) completeOIDCOAuthRegistrationSession(
+	c *gin.Context,
+	session *dbent.PendingAuthSession,
+	req completeOIDCOAuthRequest,
+	skipLegacyEmailGate bool,
+	clearCookies func(),
+) {
 	if err := ensurePendingOAuthCompleteRegistrationSession(session); err != nil {
 		response.ErrorFrom(c, err)
 		return
 	}
-	if updatedSession, handled, err := h.legacyCompleteRegistrationSessionStatus(c, session); err != nil {
-		response.ErrorFrom(c, err)
-		return
-	} else if handled {
-		c.JSON(http.StatusOK, buildPendingOAuthSessionStatusPayload(updatedSession))
-		return
-	} else {
-		session = updatedSession
+	if !skipLegacyEmailGate {
+		if updatedSession, handled, err := h.legacyCompleteRegistrationSessionStatus(c, session); err != nil {
+			response.ErrorFrom(c, err)
+			return
+		} else if handled {
+			c.JSON(http.StatusOK, buildPendingOAuthSessionStatusPayload(updatedSession))
+			return
+		} else {
+			session = updatedSession
+		}
 	}
 	if err := h.ensureBackendModeAllowsNewUserLogin(c.Request.Context()); err != nil {
 		response.ErrorFrom(c, err)
@@ -682,10 +847,7 @@ func (h *AuthHandler) CompleteOIDCOAuthRegistration(c *gin.Context) {
 		respondPendingOAuthBindingApplyError(c, err)
 		return
 	}
-	decision, err := h.ensurePendingOAuthAdoptionDecision(c, session.ID, oauthAdoptionDecisionRequest{
-		AdoptDisplayName: req.AdoptDisplayName,
-		AdoptAvatar:      req.AdoptAvatar,
-	})
+	decision, err := h.ensurePendingOAuthAdoptionDecision(c, session.ID, req.adoptionDecision())
 	if err != nil {
 		response.ErrorFrom(c, err)
 		return
@@ -708,8 +870,9 @@ func (h *AuthHandler) CompleteOIDCOAuthRegistration(c *gin.Context) {
 		return
 	}
 	h.authService.RecordSuccessfulLogin(c.Request.Context(), user.ID)
-	clearOAuthPendingSessionCookie(c, secureCookie)
-	clearOAuthPendingBrowserCookie(c, secureCookie)
+	if clearCookies != nil {
+		clearCookies()
+	}
 
 	c.JSON(http.StatusOK, gin.H{
 		"access_token":  tokenPair.AccessToken,
@@ -900,6 +1063,9 @@ func oidcParseUserInfo(body string, cfg config.OIDCConnectConfig) *oidcUserInfoC
 	)
 	if verified, ok := getGJSONBool(body, "email_verified"); ok {
 		claims.EmailVerified = &verified
+	}
+	if inOrg, ok := getGJSONBool(body, "in_oxsci_org"); ok {
+		claims.InOxSciOrg = &inOrg
 	}
 	claims.DisplayName = firstNonEmpty(
 		getGJSON(body, "name"),
@@ -1189,6 +1355,29 @@ func oidcSyntheticEmailFromIdentityKey(identityKey string) string {
 	return "oidc-" + hex.EncodeToString(sum[:16]) + service.OIDCConnectSyntheticEmailDomain
 }
 
+func oidcNormalizeEmailClaim(email string) string {
+	email = strings.TrimSpace(strings.ToLower(email))
+	if email == "" {
+		return ""
+	}
+	parsed, err := mail.ParseAddress(email)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(strings.ToLower(parsed.Address))
+}
+
+func oidcCanAutoCompleteLogin(email string, emailVerified bool) bool {
+	if strings.TrimSpace(email) == "" {
+		return false
+	}
+	return emailVerified
+}
+
+func oidcInOxSciOrg(claims *oidcUserInfoClaims) bool {
+	return claims != nil && claims.InOxSciOrg != nil && *claims.InOxSciOrg
+}
+
 func oidcFallbackUsername(subject string) string {
 	subject = strings.TrimSpace(subject)
 	if subject == "" {
@@ -1222,7 +1411,7 @@ func oidcClearCookie(c *gin.Context, name string, secure bool) {
 	})
 }
 
-// tryOIDCVerifiedEmailFastPath 在 OIDC 上游已返回已验证邮箱时尝试跳过 choice/pending 页。
+// tryOIDCVerifiedEmailFastPath 在 OIDC 上游已返回已验证邮箱或可信组织身份时尝试跳过 choice/pending 页。
 // 返回 true 表示已经写出重定向响应；返回 false 表示调用方应继续回退到常规 choice 流程。
 func (h *AuthHandler) tryOIDCVerifiedEmailFastPath(
 	c *gin.Context,
@@ -1232,15 +1421,13 @@ func (h *AuthHandler) tryOIDCVerifiedEmailFastPath(
 	compatEmail string,
 	username string,
 	upstreamClaims map[string]any,
+	trustedOrg bool,
 ) bool {
 	if h == nil || h.authService == nil || h.settingSvc == nil {
 		return false
 	}
 	ctx := c.Request.Context()
-	if h.isForceEmailOnThirdPartySignup(ctx) {
-		return false
-	}
-	if h.settingSvc.IsInvitationCodeEnabled(ctx) {
+	if !trustedOrg && h.isForceEmailOnThirdPartySignup(ctx) {
 		return false
 	}
 	if err := h.ensureBackendModeAllowsNewUserLogin(ctx); err != nil {
@@ -1266,6 +1453,7 @@ func (h *AuthHandler) tryOIDCVerifiedEmailFastPath(
 		ProviderSubject:  strings.TrimSpace(identity.ProviderSubject),
 		Email:            verifiedEmail,
 		EmailVerified:    true,
+		TrustedOrg:       trustedOrg,
 		Username:         strings.TrimSpace(username),
 		DisplayName:      pendingSessionStringValue(upstreamClaims, "suggested_display_name"),
 		AvatarURL:        pendingSessionStringValue(upstreamClaims, "suggested_avatar_url"),

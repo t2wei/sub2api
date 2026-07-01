@@ -19,6 +19,7 @@ type EmailOAuthIdentityInput struct {
 	ProviderSubject  string
 	Email            string
 	EmailVerified    bool
+	TrustedOrg       bool
 	Username         string
 	DisplayName      string
 	AvatarURL        string
@@ -85,8 +86,8 @@ func (s *AuthService) loginOrRegisterVerifiedEmailOAuth(
 	if isReservedEmail(email) {
 		return nil, nil, ErrEmailReserved
 	}
-	// 精确黑名单只拦新建账号（见 createEmailOAuthUser），已有账号能否登录由账号状态决定。
-	if err := s.validateRegistrationEmailSuffixPolicy(ctx, email); err != nil {
+	// 精确黑名单只拦新建账号，已有账号能否登录由账号状态决定。
+	if err := s.validateVerifiedEmailOAuthRegistrationPolicy(ctx, providerType, email, input.TrustedOrg); err != nil {
 		return nil, nil, err
 	}
 
@@ -104,7 +105,7 @@ func (s *AuthService) loginOrRegisterVerifiedEmailOAuth(
 		user, err = s.userRepo.GetByEmail(ctx, email)
 		if err != nil {
 			if errors.Is(err, ErrUserNotFound) {
-				user, err = s.createEmailOAuthUser(ctx, email, input.Username, providerType, invitationCode, affiliateCode)
+				user, err = s.createEmailOAuthUser(ctx, email, input.Username, providerType, invitationCode, affiliateCode, input.TrustedOrg)
 				if err != nil {
 					return nil, nil, err
 				}
@@ -125,6 +126,7 @@ func (s *AuthService) loginOrRegisterVerifiedEmailOAuth(
 		ProviderSubject:  providerSubject,
 		Email:            email,
 		EmailVerified:    input.EmailVerified,
+		TrustedOrg:       input.TrustedOrg,
 		Username:         input.Username,
 		DisplayName:      input.DisplayName,
 		AvatarURL:        input.AvatarURL,
@@ -155,19 +157,36 @@ func (s *AuthService) loginOrRegisterVerifiedEmailOAuth(
 	return tokenPair, user, nil
 }
 
-func (s *AuthService) createEmailOAuthUser(ctx context.Context, email, username, providerType, invitationCode, affiliateCode string) (*User, error) {
-	if s.settingService == nil || !s.settingService.IsRegistrationEnabled(ctx) {
+func (s *AuthService) validateVerifiedEmailOAuthRegistrationPolicy(ctx context.Context, providerType, email string, trustedOrg bool) error {
+	if normalizeOAuthSignupSource(providerType) == "oidc" && trustedOrg {
+		return nil
+	}
+	return s.validateRegistrationEmailSuffixPolicy(ctx, email)
+}
+
+func (s *AuthService) createEmailOAuthUser(ctx context.Context, email, username, providerType, invitationCode, affiliateCode string, trustedOrg bool) (*User, error) {
+	// 与 LoginOrRegisterOAuthWithTokenPair 的注册门槛保持一致：可信 OAuth 提供商
+	// （oidc / dingtalk internal_only）即使全局关闭注册也允许自动建号。否则
+	// verified-email 直登快捷路径会在 registration_enabled=false 时回落到 choice 页，
+	// 新用户建不出来。
+	if s.settingService == nil ||
+		(!s.settingService.IsRegistrationEnabled(ctx) &&
+			!s.canBypassRegistrationDisabledForOAuth(ctx, providerType)) {
 		return nil, ErrRegDisabled
 	}
 	if s.settingService.IsRegistrationEmailBlacklisted(ctx, email) {
 		return nil, ErrEmailBlocked
 	}
-	invitationRedeemCode, err := s.validateOAuthRegistrationInvitation(ctx, invitationCode)
-	if err != nil {
-		if errors.Is(err, ErrInvitationCodeRequired) {
-			return nil, ErrOAuthInvitationRequired
+	var invitationRedeemCode *RedeemCode
+	if !(normalizeOAuthSignupSource(providerType) == "oidc" && trustedOrg) {
+		var err error
+		invitationRedeemCode, err = s.validateOAuthRegistrationInvitation(ctx, invitationCode)
+		if err != nil {
+			if errors.Is(err, ErrInvitationCodeRequired) {
+				return nil, ErrOAuthInvitationRequired
+			}
+			return nil, err
 		}
-		return nil, err
 	}
 
 	randomPassword, err := randomHexString(32)
@@ -249,6 +268,9 @@ func (s *AuthService) ensureEmailOAuthIdentity(ctx context.Context, userID int64
 	}
 	for key, value := range input.UpstreamMetadata {
 		metadata[key] = value
+	}
+	if input.TrustedOrg {
+		metadata["trusted_org"] = true
 	}
 	if strings.TrimSpace(input.Username) != "" {
 		metadata["username"] = strings.TrimSpace(input.Username)
