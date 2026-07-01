@@ -578,6 +578,7 @@ func (s *GatewayService) buildCountTokensRequest(ctx context.Context, c *gin.Con
 func sanitizeCountTokensRequestBody(body []byte) []byte {
 	out := body
 	for _, path := range []string{
+		"max_tokens",
 		"temperature",
 		"top_p",
 		"top_k",

@@ -212,6 +212,14 @@ func TestParseGatewayRequest_AnthropicIgnoresGeminiFields(t *testing.T) {
 	require.Equal(t, "real content", messages[0].Get("content").String())
 }
 
+func TestIsThinkingBlockSignatureError_EmptyThinkingBlock(t *testing.T) {
+	s := &GatewayService{}
+
+	require.True(t, s.isThinkingBlockSignatureError([]byte(`{"type":"error","error":{"type":"invalid_request_error","message":"messages.5.content.0.thinking: each thinking block must contain thinking"}}`)))
+	require.True(t, s.isThinkingBlockSignatureError([]byte(`{"type":"error","error":{"type":"invalid_request_error","message":"messages.5.content.0.thinking: each thinking block must contain \"thinking\""}}`)))
+	require.False(t, s.isThinkingBlockSignatureError([]byte(`{"type":"error","error":{"type":"invalid_request_error","message":"messages.5.content.0.text: text block mentions thinking but is otherwise invalid"}}`)))
+}
+
 func TestFilterThinkingBlocks(t *testing.T) {
 	containsThinkingBlock := func(body []byte) bool {
 		var req map[string]any
