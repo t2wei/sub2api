@@ -75,6 +75,26 @@ const OAuthButtonStub = defineComponent({
   }
 })
 
+const OidcButtonStub = defineComponent({
+  props: {
+    providerName: {
+      type: String,
+      default: ''
+    }
+  },
+  emits: ['start'],
+  setup(props, { emit }) {
+    return () => h('button', {
+      type: 'button',
+      'data-testid': 'oidc-start',
+      onClick: () => emit('start', {
+        provider: 'oidc',
+        params: { redirect: '/dashboard' }
+      })
+    }, `Log in with ${props.providerName}`)
+  }
+})
+
 function mountLogin() {
   return mount(LoginView, {
     global: {
@@ -88,7 +108,7 @@ function mountLogin() {
         EmailOAuthButtons: OAuthButtonStub,
         LinuxDoOAuthSection: true,
         DingTalkOAuthSection: true,
-        OidcOAuthSection: true,
+        OidcOAuthSection: OidcButtonStub,
         WechatOAuthSection: true
       }
     }
@@ -225,5 +245,34 @@ describe('Tencent captcha action gate', () => {
     await flushPromises()
 
     expect(loginWithPasskeyMock).not.toHaveBeenCalled()
+  })
+
+  it('uses a single XSci SSO entry when the OIDC provider is the old OxSci name', async () => {
+    getPublicSettingsMock.mockResolvedValueOnce({
+      turnstile_enabled: false,
+      turnstile_site_key: '',
+      tencent_captcha_enabled: false,
+      tencent_captcha_app_id: '',
+      backend_mode_enabled: false,
+      password_reset_enabled: true,
+      passkey_enabled: true,
+      github_oauth_enabled: true,
+      google_oauth_enabled: true,
+      linuxdo_oauth_enabled: true,
+      dingtalk_oauth_enabled: true,
+      wechat_oauth_enabled: true,
+      oidc_oauth_enabled: true,
+      oidc_oauth_provider_name: 'OxSci'
+    })
+
+    const wrapper = mountLogin()
+    await flushPromises()
+
+    expect(wrapper.find('#email').exists()).toBe(false)
+    expect(wrapper.find('#password').exists()).toBe(false)
+    expect(wrapper.find('form').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="oauth-start"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="oidc-start"]').exists()).toBe(true)
+    expect(wrapper.get('[data-testid="oidc-start"]').text()).toContain('XSci')
   })
 })

@@ -866,6 +866,34 @@ func TestAuthService_LoginOrRegisterOAuthWithTokenPair_UsesLinuxDoAuthSourceDefa
 	require.Equal(t, 14, assigner.calls[0].ValidityDays)
 }
 
+func TestAuthService_LoginOrRegisterOAuthWithTokenPairForSource_OIDCBypassesRegistrationDisabled(t *testing.T) {
+	repo := &userRepoStub{nextID: 62}
+	service := newAuthService(repo, map[string]string{
+		SettingKeyRegistrationEnabled:                "false",
+		SettingKeyAuthSourceDefaultOIDCBalance:       "12.25",
+		SettingKeyAuthSourceDefaultOIDCGrantOnSignup: "true",
+	}, nil, nil)
+	service.refreshTokenCache = &refreshTokenCacheStub{}
+
+	tokenPair, user, err := service.LoginOrRegisterOAuthWithTokenPairForSource(
+		context.Background(),
+		"oidc-user@example.com",
+		"oidc_user",
+		"",
+		"",
+		"oidc",
+	)
+
+	require.NoError(t, err)
+	require.NotNil(t, tokenPair)
+	require.NotNil(t, user)
+	require.Equal(t, int64(62), user.ID)
+	require.Equal(t, "oidc-user@example.com", user.Email)
+	require.Equal(t, "oidc", user.SignupSource)
+	require.Equal(t, 12.25, user.Balance)
+	require.Len(t, repo.created, 1)
+}
+
 func TestAuthService_LoginOrRegisterOAuthWithTokenPair_ExistingUserDoesNotGrantAgain(t *testing.T) {
 	existing := &User{
 		ID:           88,

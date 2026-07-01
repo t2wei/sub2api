@@ -669,6 +669,9 @@ func (s *AuthService) LoginOrRegisterOAuth(ctx context.Context, email, username 
 // canBypassRegistrationDisabledForOAuth 在钉钉企业模式（internal_only）且
 // dingtalk_connect_bypass_registration=true 时，允许跳过全局 registration_enabled 检查。
 func (s *AuthService) canBypassRegistrationDisabledForOAuth(ctx context.Context, signupSource string) bool {
+	if signupSource == "oidc" {
+		return true
+	}
 	if signupSource != "dingtalk" {
 		return false
 	}
@@ -753,6 +756,8 @@ func (s *AuthService) loginOrRegisterOAuthWithTokenPair(ctx context.Context, ema
 			// 否则才按邮箱后缀推断——避免有真实邮箱的 OAuth 用户被推断为 "email" 渠道，导致渠道授权错读。
 			if strings.TrimSpace(signupSource) == "" {
 				signupSource = inferLegacySignupSource(email)
+			} else {
+				signupSource = normalizeOAuthSignupSource(signupSource)
 			}
 			grantPlan := s.resolveSignupGrantPlan(ctx, signupSource)
 			var defaultRPMLimit int
@@ -881,6 +886,12 @@ func (s *AuthService) applyOAuthSignupPromoCode(ctx context.Context, user *User,
 		return updatedUser
 	}
 	return user
+}
+
+// LoginOrRegisterOAuthWithTokenPairForSource is the provider-aware variant used
+// when the local email is a real provider email rather than a synthetic email.
+func (s *AuthService) LoginOrRegisterOAuthWithTokenPairForSource(ctx context.Context, email, username, invitationCode, affiliateCode, signupSource string) (*TokenPair, *User, error) {
+	return s.LoginOrRegisterOAuthWithTokenPair(ctx, email, username, invitationCode, affiliateCode, signupSource)
 }
 
 func (s *AuthService) assignSubscriptions(ctx context.Context, userID int64, items []DefaultSubscriptionSetting, notes string) {

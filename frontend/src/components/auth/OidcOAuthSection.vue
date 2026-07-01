@@ -25,6 +25,7 @@ import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import type { OAuthLoginStart } from '@/api/auth'
 import { resolveAffiliateReferralCode, storeOAuthAffiliateCode } from '@/utils/oauthAffiliate'
+import { normalizeOIDCProviderName } from '@/utils/oidcProviderName'
 
 const props = withDefaults(defineProps<{
   disabled?: boolean
@@ -43,8 +44,7 @@ const route = useRoute()
 const { t } = useI18n()
 
 const normalizedProviderName = computed(() => {
-  const name = props.providerName?.trim()
-  return name || 'OIDC'
+  return normalizeOIDCProviderName(props.providerName)
 })
 
 const providerInitial = computed(() => normalizedProviderName.value.charAt(0).toUpperCase() || 'O')

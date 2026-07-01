@@ -341,7 +341,7 @@ export default {
       signIn: 'Continue with {providerName}'
     },
     oidc: {
-      signIn: 'Continue with {providerName}',
+      signIn: 'Log in with {providerName}',
       callbackTitle: 'Signing you in with {providerName}',
       callbackProcessing: 'Completing login with {providerName}, please wait...',
       callbackHint: 'If you are not redirected automatically, go back to the login page and try again.',

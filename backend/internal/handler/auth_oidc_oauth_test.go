@@ -110,7 +110,8 @@ func TestOIDCParseUserInfoIncludesSuggestedProfile(t *testing.T) {
 		"name":"Alice Example",
 		"picture":"https://cdn.example/avatar.png",
 		"email":"alice@example.com",
-		"email_verified":true
+		"email_verified":true,
+		"in_oxsci_org":true
 	}`, cfg)
 
 	require.Equal(t, "subject-1", claims.Subject)
@@ -119,6 +120,8 @@ func TestOIDCParseUserInfoIncludesSuggestedProfile(t *testing.T) {
 	require.Equal(t, "https://cdn.example/avatar.png", claims.AvatarURL)
 	require.NotNil(t, claims.EmailVerified)
 	require.True(t, *claims.EmailVerified)
+	require.NotNil(t, claims.InOxSciOrg)
+	require.True(t, *claims.InOxSciOrg)
 }
 
 func buildRSAJWK(kid string, pub *rsa.PublicKey) oidcJWK {
@@ -229,7 +232,7 @@ func TestOIDCOAuthCallbackAllowsOptionalPKCEAndIDTokenValidation(t *testing.T) {
 			_, _ = w.Write([]byte(`{"access_token":"oidc-access","token_type":"Bearer","expires_in":3600}`))
 		case "/userinfo":
 			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`{"sub":"oidc-subject-compat","preferred_username":"oidc_user","name":"OIDC Display","email":"oidc@example.com"}`))
+			_, _ = w.Write([]byte(`{"sub":"oidc-subject-compat","preferred_username":"oidc_user","name":"OIDC Display","email":"oidc@example.com","in_oxsci_org":true}`))
 		default:
 			http.NotFound(w, r)
 		}
@@ -278,6 +281,7 @@ func TestOIDCOAuthCallbackCreatesLoginPendingSessionForExistingIdentityUser(t *t
 		AvatarURL:         "https://cdn.example/oidc-login.png",
 		Email:             "oidc-login@example.com",
 		EmailVerified:     true,
+		InOxSciOrg:        boolPtr(true),
 	})
 	defer cleanup()
 
@@ -341,11 +345,56 @@ func TestOIDCOAuthCallbackCreatesLoginPendingSessionForExistingIdentityUser(t *t
 	require.Nil(t, completion["error"])
 }
 
+func TestOIDCOAuthCallbackRejectsMissingOrgClaimBeforePendingSession(t *testing.T) {
+	cfg, cleanup := newOIDCTestProvider(t, oidcProviderFixture{
+		Subject:           "oidc-subject-missing-org",
+		PreferredUsername: "oidc_missing_org",
+		DisplayName:       "OIDC Missing Org",
+		Email:             "missing-org@example.com",
+		EmailVerified:     true,
+	})
+	defer cleanup()
+
+	handler, client := newOIDCOAuthHandlerAndClientWithSettings(t, false, cfg, nil)
+	t.Cleanup(func() { _ = client.Close() })
+
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/oauth/oidc/callback?code=oidc-code&state=state-missing-org", nil)
+	req.AddCookie(encodedCookie(oidcOAuthStateCookieName, "state-missing-org"))
+	req.AddCookie(encodedCookie(oidcOAuthRedirectCookie, "/dashboard"))
+	req.AddCookie(encodedCookie(oidcOAuthVerifierCookie, "verifier-missing-org"))
+	req.AddCookie(encodedCookie(oidcOAuthNonceCookie, "nonce-oidc-subject-missing-org"))
+	req.AddCookie(encodedCookie(oidcOAuthIntentCookieName, oauthIntentLogin))
+	req.AddCookie(encodedCookie(oauthPendingBrowserCookieName, "browser-missing-org"))
+	c.Request = req
+
+	handler.OIDCOAuthCallback(c)
+
+	require.Equal(t, http.StatusFound, recorder.Code)
+	assertOAuthRedirectError(t, recorder.Header().Get("Location"), "org_not_allowed", "account is not in XSci organization")
+	require.Nil(t, findCookie(recorder.Result().Cookies(), oauthPendingSessionCookieName))
+
+	ctx := context.Background()
+	userCount, err := client.User.Query().Where(dbuser.EmailEQ("missing-org@example.com")).Count(ctx)
+	require.NoError(t, err)
+	require.Zero(t, userCount)
+	identityCount, err := client.AuthIdentity.Query().
+		Where(authidentity.ProviderSubjectEQ("oidc-subject-missing-org")).
+		Count(ctx)
+	require.NoError(t, err)
+	require.Zero(t, identityCount)
+	pendingCount, err := client.PendingAuthSession.Query().Count(ctx)
+	require.NoError(t, err)
+	require.Zero(t, pendingCount)
+}
+
 func TestOIDCOAuthCallbackRejectsDisabledExistingIdentityUser(t *testing.T) {
 	cfg, cleanup := newOIDCTestProvider(t, oidcProviderFixture{
 		Subject:           "oidc-disabled-subject",
 		PreferredUsername: "oidc_disabled",
 		DisplayName:       "OIDC Disabled",
+		InOxSciOrg:        boolPtr(true),
 	})
 	defer cleanup()
 
@@ -391,6 +440,70 @@ func TestOIDCOAuthCallbackRejectsDisabledExistingIdentityUser(t *testing.T) {
 	require.Zero(t, count)
 }
 
+func TestOIDCOAuthCallbackRejectsExistingIdentityWhenOrgClaimFalse(t *testing.T) {
+	cfg, cleanup := newOIDCTestProvider(t, oidcProviderFixture{
+		Subject:           "oidc-subject-removed-org",
+		PreferredUsername: "oidc_removed_org",
+		DisplayName:       "OIDC Removed Org",
+		Email:             "removed-org@example.com",
+		EmailVerified:     true,
+		InOxSciOrg:        boolPtr(false),
+	})
+	defer cleanup()
+
+	handler, client := newOIDCOAuthHandlerAndClientWithSettings(t, false, cfg, nil)
+	t.Cleanup(func() { _ = client.Close() })
+
+	ctx := context.Background()
+	existingUser, err := client.User.Create().
+		SetEmail("removed-org@example.com").
+		SetUsername("removed-org-user").
+		SetPasswordHash("hash").
+		SetRole(service.RoleUser).
+		SetStatus(service.StatusActive).
+		Save(ctx)
+	require.NoError(t, err)
+	_, err = client.AuthIdentity.Create().
+		SetUserID(existingUser.ID).
+		SetProviderType("oidc").
+		SetProviderKey(cfg.IssuerURL).
+		SetProviderSubject("oidc-subject-removed-org").
+		SetMetadata(map[string]any{"in_oxsci_org": true}).
+		Save(ctx)
+	require.NoError(t, err)
+
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/oauth/oidc/callback?code=oidc-code&state=state-removed-org", nil)
+	req.AddCookie(encodedCookie(oidcOAuthStateCookieName, "state-removed-org"))
+	req.AddCookie(encodedCookie(oidcOAuthRedirectCookie, "/dashboard"))
+	req.AddCookie(encodedCookie(oidcOAuthVerifierCookie, "verifier-removed-org"))
+	req.AddCookie(encodedCookie(oidcOAuthNonceCookie, "nonce-oidc-subject-removed-org"))
+	req.AddCookie(encodedCookie(oidcOAuthIntentCookieName, oauthIntentLogin))
+	req.AddCookie(encodedCookie(oauthPendingBrowserCookieName, "browser-removed-org"))
+	c.Request = req
+
+	handler.OIDCOAuthCallback(c)
+
+	require.Equal(t, http.StatusFound, recorder.Code)
+	assertOAuthRedirectError(t, recorder.Header().Get("Location"), "org_not_allowed", "account is not in XSci organization")
+	require.Nil(t, findCookie(recorder.Result().Cookies(), oauthPendingSessionCookieName))
+
+	identityCount, err := client.AuthIdentity.Query().
+		Where(
+			authidentity.ProviderTypeEQ("oidc"),
+			authidentity.ProviderKeyEQ(cfg.IssuerURL),
+			authidentity.ProviderSubjectEQ("oidc-subject-removed-org"),
+			authidentity.UserIDEQ(existingUser.ID),
+		).
+		Count(ctx)
+	require.NoError(t, err)
+	require.Equal(t, 1, identityCount)
+	pendingCount, err := client.PendingAuthSession.Query().Count(ctx)
+	require.NoError(t, err)
+	require.Zero(t, pendingCount)
+}
+
 func TestOIDCOAuthCallbackCreatesBindPendingSessionForCompatEmailUser(t *testing.T) {
 	cfg, cleanup := newOIDCTestProvider(t, oidcProviderFixture{
 		Subject:           "oidc-subject-compat",
@@ -399,6 +512,7 @@ func TestOIDCOAuthCallbackCreatesBindPendingSessionForCompatEmailUser(t *testing
 		AvatarURL:         "https://cdn.example/oidc-compat.png",
 		Email:             "legacy@example.com",
 		EmailVerified:     true,
+		InOxSciOrg:        boolPtr(true),
 	})
 	defer cleanup()
 
@@ -448,12 +562,22 @@ func TestOIDCOAuthCallbackCreatesBindPendingSessionForCompatEmailUser(t *testing
 	require.True(t, ok)
 	require.Equal(t, "/dashboard", completion["redirect"])
 	require.Equal(t, oauthPendingChoiceStep, completion["step"])
-	require.Equal(t, existingUser.Email, completion["email"])
+	require.Equal(t, true, completion["adoption_required"])
+	require.Equal(t, "compat_email_match", completion["choice_reason"])
 	require.Equal(t, existingUser.Email, completion["existing_account_email"])
 	require.Equal(t, true, completion["existing_account_bindable"])
-	require.Equal(t, "compat_email_match", completion["choice_reason"])
 	_, hasAccessToken := completion["access_token"]
 	require.False(t, hasAccessToken)
+
+	identityCount, err := client.AuthIdentity.Query().
+		Where(
+			authidentity.ProviderTypeEQ("oidc"),
+			authidentity.ProviderKeyEQ(cfg.IssuerURL),
+			authidentity.ProviderSubjectEQ("oidc-subject-compat"),
+		).
+		Count(ctx)
+	require.NoError(t, err)
+	require.Zero(t, identityCount)
 }
 
 func TestOIDCOAuthCallbackAllowsCompatEmailBindWhenUpstreamEmailIsUnverified(t *testing.T) {
@@ -464,6 +588,7 @@ func TestOIDCOAuthCallbackAllowsCompatEmailBindWhenUpstreamEmailIsUnverified(t *
 		AvatarURL:         "https://cdn.example/oidc-unverified.png",
 		Email:             "owner@example.com",
 		EmailVerified:     false,
+		InOxSciOrg:        boolPtr(true),
 	})
 	defer cleanup()
 	cfg.RequireEmailVerified = true
@@ -495,15 +620,92 @@ func TestOIDCOAuthCallbackAllowsCompatEmailBindWhenUpstreamEmailIsUnverified(t *
 	handler.OIDCOAuthCallback(c)
 
 	require.Equal(t, http.StatusFound, recorder.Code)
-	require.Equal(t, "/auth/oidc/callback#error=email_not_verified&error_message=email+is+not+verified", recorder.Header().Get("Location"))
-	require.Nil(t, findCookie(recorder.Result().Cookies(), oauthPendingSessionCookieName))
+	require.Equal(t, "/auth/oidc/callback", recorder.Header().Get("Location"))
 
-	count, err := client.PendingAuthSession.Query().Count(ctx)
+	sessionCookie := findCookie(recorder.Result().Cookies(), oauthPendingSessionCookieName)
+	require.NotNil(t, sessionCookie)
+
+	session, err := client.PendingAuthSession.Query().
+		Where(pendingauthsession.SessionTokenEQ(decodeCookieValueForTest(t, sessionCookie.Value))).
+		Only(ctx)
 	require.NoError(t, err)
-	require.Zero(t, count)
+	require.Equal(t, oauthIntentLogin, session.Intent)
+	require.NotNil(t, session.TargetUserID)
+	require.Equal(t, "owner@example.com", session.ResolvedEmail)
+	require.Equal(t, true, session.UpstreamIdentityClaims["trusted_org"])
+	require.Equal(t, true, session.UpstreamIdentityClaims["email_verified"])
+	require.Equal(t, false, session.UpstreamIdentityClaims["upstream_email_verified"])
 }
 
-func TestOIDCOAuthCallbackCreatesChoicePendingSessionWhenSignupRequiresInvite(t *testing.T) {
+func TestOIDCOAuthCallbackTrustedOrgFastPathBindsCompatEmailUser(t *testing.T) {
+	cfg, cleanup := newOIDCTestProvider(t, oidcProviderFixture{
+		Subject:           "oidc-subject-trusted-compat",
+		PreferredUsername: "trusted_compat",
+		DisplayName:       "Trusted Compat Display",
+		AvatarURL:         "https://cdn.example/oidc-trusted-compat.png",
+		Email:             "owner@xsci.com",
+		EmailVerified:     false,
+		InOxSciOrg:        boolPtr(true),
+	})
+	defer cleanup()
+	cfg.RequireEmailVerified = true
+
+	handler, client := newOIDCOAuthHandlerAndClientWithSettings(t, false, cfg, map[string]string{
+		service.SettingKeyRegistrationEmailSuffixWhitelist: `["@qq.com"]`,
+	})
+	t.Cleanup(func() { _ = client.Close() })
+
+	ctx := context.Background()
+	existingUser, err := client.User.Create().
+		SetEmail("owner@xsci.com").
+		SetUsername("owner-user").
+		SetPasswordHash("hash").
+		SetRole(service.RoleUser).
+		SetStatus(service.StatusActive).
+		Save(ctx)
+	require.NoError(t, err)
+
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/oauth/oidc/callback?code=oidc-code&state=state-trusted-compat", nil)
+	req.AddCookie(encodedCookie(oidcOAuthStateCookieName, "state-trusted-compat"))
+	req.AddCookie(encodedCookie(oidcOAuthRedirectCookie, "/dashboard"))
+	req.AddCookie(encodedCookie(oidcOAuthVerifierCookie, "verifier-trusted-compat"))
+	req.AddCookie(encodedCookie(oidcOAuthNonceCookie, "nonce-oidc-subject-trusted-compat"))
+	req.AddCookie(encodedCookie(oidcOAuthIntentCookieName, oauthIntentLogin))
+	req.AddCookie(encodedCookie(oauthPendingBrowserCookieName, "browser-trusted-compat"))
+	c.Request = req
+
+	handler.OIDCOAuthCallback(c)
+
+	require.Equal(t, http.StatusFound, recorder.Code)
+	location := recorder.Header().Get("Location")
+	require.Contains(t, location, "/auth/oidc/callback#")
+	require.Contains(t, location, "access_token=")
+	requireCookieCleared(t, recorder, oauthPendingSessionCookieName)
+	requireCookieCleared(t, recorder, oauthPendingBrowserCookieName)
+
+	identity, err := client.AuthIdentity.Query().
+		Where(
+			authidentity.ProviderTypeEQ("oidc"),
+			authidentity.ProviderKeyEQ(cfg.IssuerURL),
+			authidentity.ProviderSubjectEQ("oidc-subject-trusted-compat"),
+		).
+		Only(ctx)
+	require.NoError(t, err)
+	require.Equal(t, existingUser.ID, identity.UserID)
+	require.Equal(t, "owner@xsci.com", identity.Metadata["email"])
+	require.Equal(t, true, identity.Metadata["email_verified"])
+	require.Equal(t, false, identity.Metadata["upstream_email_verified"])
+	require.Equal(t, true, identity.Metadata["in_oxsci_org"])
+	require.Equal(t, true, identity.Metadata["trusted_org"])
+
+	pendingCount, err := client.PendingAuthSession.Query().Count(ctx)
+	require.NoError(t, err)
+	require.Zero(t, pendingCount)
+}
+
+func TestOIDCOAuthCallbackCreatesInvitationPendingSessionWhenSignupRequiresInvite(t *testing.T) {
 	cfg, cleanup := newOIDCTestProvider(t, oidcProviderFixture{
 		Subject:           "oidc-subject-invite",
 		PreferredUsername: "oidc_invite",
@@ -511,6 +713,7 @@ func TestOIDCOAuthCallbackCreatesChoicePendingSessionWhenSignupRequiresInvite(t 
 		AvatarURL:         "https://cdn.example/oidc-invite.png",
 		Email:             "oidc-invite@example.com",
 		EmailVerified:     true,
+		InOxSciOrg:        boolPtr(true),
 	})
 	defer cleanup()
 
@@ -546,9 +749,189 @@ func TestOIDCOAuthCallbackCreatesChoicePendingSessionWhenSignupRequiresInvite(t 
 
 	completion, ok := session.LocalFlowState[oauthCompletionResponseKey].(map[string]any)
 	require.True(t, ok)
-	require.Equal(t, oauthPendingChoiceStep, completion["step"])
 	require.Equal(t, "/dashboard", completion["redirect"])
-	require.Equal(t, "third_party_signup", completion["choice_reason"])
+	require.Equal(t, oauthPendingChoiceStep, completion["step"])
+	require.Equal(t, true, completion["adoption_required"])
+	require.Equal(t, true, completion["create_account_allowed"])
+	require.Equal(t, false, completion["existing_account_bindable"])
+	_, hasAccessToken := completion["access_token"]
+	require.False(t, hasAccessToken)
+	require.Equal(t, "oidc-invite@example.com", session.ResolvedEmail)
+}
+
+func TestOIDCOAuthCallbackFastPathSignupWithClaimedEmail(t *testing.T) {
+	cfg, cleanup := newOIDCTestProvider(t, oidcProviderFixture{
+		Subject:           "oidc-subject-auto",
+		PreferredUsername: "oidc_auto",
+		DisplayName:       "OIDC Auto Display",
+		AvatarURL:         "https://cdn.example/oidc-auto.png",
+		Email:             "oidc-auto@example.com",
+		EmailVerified:     true,
+		InOxSciOrg:        boolPtr(true),
+	})
+	defer cleanup()
+
+	handler, client := newOIDCOAuthHandlerAndClientWithSettings(t, false, cfg, nil)
+	t.Cleanup(func() { _ = client.Close() })
+
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/oauth/oidc/callback?code=oidc-code&state=state-auto", nil)
+	req.AddCookie(encodedCookie(oidcOAuthStateCookieName, "state-auto"))
+	req.AddCookie(encodedCookie(oidcOAuthRedirectCookie, "/dashboard"))
+	req.AddCookie(encodedCookie(oidcOAuthVerifierCookie, "verifier-auto"))
+	req.AddCookie(encodedCookie(oidcOAuthNonceCookie, "nonce-oidc-subject-auto"))
+	req.AddCookie(encodedCookie(oidcOAuthIntentCookieName, oauthIntentLogin))
+	req.AddCookie(encodedCookie(oauthPendingBrowserCookieName, "browser-auto"))
+	c.Request = req
+
+	handler.OIDCOAuthCallback(c)
+
+	require.Equal(t, http.StatusFound, recorder.Code)
+	location := recorder.Header().Get("Location")
+	require.Contains(t, location, "/auth/oidc/callback#")
+	require.Contains(t, location, "access_token=")
+	require.Contains(t, location, "refresh_token=")
+	require.Contains(t, location, "token_type=Bearer")
+	requireCookieCleared(t, recorder, oauthPendingSessionCookieName)
+	requireCookieCleared(t, recorder, oauthPendingBrowserCookieName)
+
+	ctx := context.Background()
+	userEntity, err := client.User.Query().
+		Where(dbuser.EmailEQ("oidc-auto@example.com")).
+		Only(ctx)
+	require.NoError(t, err)
+	require.Equal(t, "oidc_auto", userEntity.Username)
+	require.Equal(t, "oidc", userEntity.SignupSource)
+
+	identity, err := client.AuthIdentity.Query().
+		Where(
+			authidentity.ProviderTypeEQ("oidc"),
+			authidentity.ProviderKeyEQ(cfg.IssuerURL),
+			authidentity.ProviderSubjectEQ("oidc-subject-auto"),
+		).
+		Only(ctx)
+	require.NoError(t, err)
+	require.Equal(t, userEntity.ID, identity.UserID)
+
+	pendingCount, err := client.PendingAuthSession.Query().Count(ctx)
+	require.NoError(t, err)
+	require.Zero(t, pendingCount)
+}
+
+func TestOIDCOAuthCallbackTrustedOrgFastPathCreatesUserWithoutEmailSuffixWhitelist(t *testing.T) {
+	cfg, cleanup := newOIDCTestProvider(t, oidcProviderFixture{
+		Subject:           "oidc-subject-trusted-auto",
+		PreferredUsername: "trusted_auto",
+		DisplayName:       "Trusted Auto Display",
+		AvatarURL:         "https://cdn.example/oidc-trusted-auto.png",
+		Email:             "newhire@xsci.com",
+		EmailVerified:     false,
+		InOxSciOrg:        boolPtr(true),
+	})
+	defer cleanup()
+	cfg.RequireEmailVerified = true
+
+	handler, client := newOIDCOAuthHandlerAndClientWithSettings(t, false, cfg, map[string]string{
+		service.SettingKeyRegistrationEmailSuffixWhitelist: `["@qq.com"]`,
+	})
+	t.Cleanup(func() { _ = client.Close() })
+
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/oauth/oidc/callback?code=oidc-code&state=state-trusted-auto", nil)
+	req.AddCookie(encodedCookie(oidcOAuthStateCookieName, "state-trusted-auto"))
+	req.AddCookie(encodedCookie(oidcOAuthRedirectCookie, "/dashboard"))
+	req.AddCookie(encodedCookie(oidcOAuthVerifierCookie, "verifier-trusted-auto"))
+	req.AddCookie(encodedCookie(oidcOAuthNonceCookie, "nonce-oidc-subject-trusted-auto"))
+	req.AddCookie(encodedCookie(oidcOAuthIntentCookieName, oauthIntentLogin))
+	req.AddCookie(encodedCookie(oauthPendingBrowserCookieName, "browser-trusted-auto"))
+	c.Request = req
+
+	handler.OIDCOAuthCallback(c)
+
+	require.Equal(t, http.StatusFound, recorder.Code)
+	location := recorder.Header().Get("Location")
+	require.Contains(t, location, "/auth/oidc/callback#")
+	require.Contains(t, location, "access_token=")
+	require.Contains(t, location, "refresh_token=")
+	requireCookieCleared(t, recorder, oauthPendingSessionCookieName)
+	requireCookieCleared(t, recorder, oauthPendingBrowserCookieName)
+
+	ctx := context.Background()
+	userEntity, err := client.User.Query().
+		Where(dbuser.EmailEQ("newhire@xsci.com")).
+		Only(ctx)
+	require.NoError(t, err)
+	require.Equal(t, "trusted_auto", userEntity.Username)
+	require.Equal(t, "oidc", userEntity.SignupSource)
+
+	identity, err := client.AuthIdentity.Query().
+		Where(
+			authidentity.ProviderTypeEQ("oidc"),
+			authidentity.ProviderKeyEQ(cfg.IssuerURL),
+			authidentity.ProviderSubjectEQ("oidc-subject-trusted-auto"),
+		).
+		Only(ctx)
+	require.NoError(t, err)
+	require.Equal(t, userEntity.ID, identity.UserID)
+	require.Equal(t, true, identity.Metadata["email_verified"])
+	require.Equal(t, false, identity.Metadata["upstream_email_verified"])
+	require.Equal(t, true, identity.Metadata["in_oxsci_org"])
+	require.Equal(t, true, identity.Metadata["trusted_org"])
+
+	pendingCount, err := client.PendingAuthSession.Query().Count(ctx)
+	require.NoError(t, err)
+	require.Zero(t, pendingCount)
+}
+
+func TestOIDCOAuthCallbackTrustedOrgFastPathIgnoresInvitationAndForceEmailSettings(t *testing.T) {
+	cfg, cleanup := newOIDCTestProvider(t, oidcProviderFixture{
+		Subject:           "oidc-subject-trusted-settings",
+		PreferredUsername: "trusted_settings",
+		DisplayName:       "Trusted Settings Display",
+		Email:             "settings@xsci.com",
+		EmailVerified:     false,
+		InOxSciOrg:        boolPtr(true),
+	})
+	defer cleanup()
+	cfg.RequireEmailVerified = true
+
+	handler, client := newOIDCOAuthHandlerAndClientWithSettings(t, true, cfg, map[string]string{
+		service.SettingKeyForceEmailOnThirdPartySignup:     "true",
+		service.SettingKeyRegistrationEmailSuffixWhitelist: `["@qq.com"]`,
+	})
+	t.Cleanup(func() { _ = client.Close() })
+
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/oauth/oidc/callback?code=oidc-code&state=state-trusted-settings", nil)
+	req.AddCookie(encodedCookie(oidcOAuthStateCookieName, "state-trusted-settings"))
+	req.AddCookie(encodedCookie(oidcOAuthRedirectCookie, "/dashboard"))
+	req.AddCookie(encodedCookie(oidcOAuthVerifierCookie, "verifier-trusted-settings"))
+	req.AddCookie(encodedCookie(oidcOAuthNonceCookie, "nonce-oidc-subject-trusted-settings"))
+	req.AddCookie(encodedCookie(oidcOAuthIntentCookieName, oauthIntentLogin))
+	req.AddCookie(encodedCookie(oauthPendingBrowserCookieName, "browser-trusted-settings"))
+	c.Request = req
+
+	handler.OIDCOAuthCallback(c)
+
+	require.Equal(t, http.StatusFound, recorder.Code)
+	location := recorder.Header().Get("Location")
+	require.Contains(t, location, "/auth/oidc/callback#")
+	require.Contains(t, location, "access_token=")
+	requireCookieCleared(t, recorder, oauthPendingSessionCookieName)
+	requireCookieCleared(t, recorder, oauthPendingBrowserCookieName)
+
+	ctx := context.Background()
+	_, err := client.User.Query().
+		Where(dbuser.EmailEQ("settings@xsci.com")).
+		Only(ctx)
+	require.NoError(t, err)
+
+	pendingCount, err := client.PendingAuthSession.Query().Count(ctx)
+	require.NoError(t, err)
+	require.Zero(t, pendingCount)
 }
 
 func TestOIDCOAuthCallbackCreatesBindPendingSessionForCurrentUser(t *testing.T) {
@@ -559,6 +942,7 @@ func TestOIDCOAuthCallbackCreatesBindPendingSessionForCurrentUser(t *testing.T) 
 		AvatarURL:         "https://cdn.example/oidc-bind.png",
 		Email:             "oidc-bind@example.com",
 		EmailVerified:     true,
+		InOxSciOrg:        boolPtr(true),
 	})
 	defer cleanup()
 
@@ -952,6 +1336,7 @@ func TestTryOIDCVerifiedEmailFastPathCreatesUserAndIdentity(t *testing.T) {
 			"suggested_display_name": "Fast Path",
 			"suggested_avatar_url":   "",
 		},
+		false,
 	)
 	require.True(t, completed)
 	require.Equal(t, http.StatusFound, recorder.Code)
@@ -990,6 +1375,7 @@ func TestOIDCOAuthCallbackVerifiedEmailFastPathIssuesTokenWithoutPendingSession(
 		AvatarURL:         "https://cdn.example/oidc-fast.png",
 		Email:             "oidc-fast-callback@example.com",
 		EmailVerified:     true,
+		InOxSciOrg:        boolPtr(true),
 	})
 	defer cleanup()
 
@@ -1050,6 +1436,7 @@ func TestOIDCOAuthCallbackVerifiedEmailFastPathBackendModeBlocksBeforeUserCreati
 		DisplayName:       "OIDC Backend Mode",
 		Email:             "oidc-backend-mode@example.com",
 		EmailVerified:     true,
+		InOxSciOrg:        boolPtr(true),
 	})
 	defer cleanup()
 
@@ -1111,6 +1498,7 @@ func TestTryOIDCVerifiedEmailFastPathSkippedWhenInvitationCodeRequired(t *testin
 		"invite-only@example.com",
 		"invite_only_user",
 		map[string]any{},
+		false,
 	)
 	require.False(t, completed)
 	require.NotEqual(t, http.StatusFound, recorder.Code)
@@ -1145,6 +1533,7 @@ func TestTryOIDCVerifiedEmailFastPathSkippedWhenForceEmailEnabled(t *testing.T) 
 		"force-email@example.com",
 		"force_email_user",
 		map[string]any{},
+		false,
 	)
 	require.False(t, completed)
 
@@ -1160,6 +1549,7 @@ type oidcProviderFixture struct {
 	AvatarURL         string
 	Email             string
 	EmailVerified     bool
+	InOxSciOrg        *bool
 }
 
 func newOIDCOAuthTestHandler(t *testing.T, invitationEnabled bool, oauthCfg config.OIDCConnectConfig) *AuthHandler {
@@ -1248,6 +1638,9 @@ func newOIDCTestProvider(t *testing.T, fixture oidcProviderFixture) (config.OIDC
 		"picture":            fixture.AvatarURL,
 		"email":              fixture.Email,
 		"email_verified":     fixture.EmailVerified,
+	}
+	if fixture.InOxSciOrg != nil {
+		userInfoPayload["in_oxsci_org"] = *fixture.InOxSciOrg
 	}
 
 	var issuer string

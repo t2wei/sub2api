@@ -11,7 +11,7 @@
         </p>
       </div>
       <!-- Login Form -->
-      <form @submit.prevent="handleLogin" class="space-y-5">
+      <form v-if="!xsciSsoOnlyLogin" @submit.prevent="handleLogin" class="space-y-5">
         <!-- Email Input -->
         <div>
           <label for="email" class="input-label">
@@ -194,10 +194,49 @@
           />
         </div>
       </form>
+
+      <div v-else class="space-y-5">
+        <div v-if="actionCaptchaEnabled">
+          <TurnstileWidget
+            ref="turnstileRef"
+            :turnstile-enabled="turnstileEnabled"
+            :turnstile-site-key="turnstileSiteKey"
+            :tencent-enabled="tencentCaptchaEnabled"
+            :tencent-app-id="tencentCaptchaAppId"
+            :tencent-region="tencentCaptchaRegion"
+            :aliyun-enabled="aliyunCaptchaEnabled"
+            :aliyun-scene-id="aliyunCaptchaSceneId"
+            :aliyun-prefix="aliyunCaptchaPrefix"
+            :aliyun-region="aliyunCaptchaRegion"
+            @verify="onTurnstileVerify"
+            @expire="onTurnstileExpire"
+            @error="onTurnstileError"
+          />
+        </div>
+
+        <LoginAgreementPrompt
+          v-if="loginAgreementEnabled"
+          :accepted="agreementAccepted"
+          :documents="loginAgreementDocuments"
+          :mode="loginAgreementMode"
+          :updated-at="loginAgreementUpdatedAt"
+          :visible="showAgreementModal"
+          @accept="acceptLoginAgreement"
+          @reject="rejectLoginAgreement"
+          @open="showAgreementModal = true"
+        />
+
+        <OidcOAuthSection
+          :disabled="authActionDisabled"
+          :provider-name="normalizedOIDCProviderName"
+          :show-divider="false"
+          @start="handleOAuthStart"
+        />
+      </div>
     </div>
 
     <!-- Footer -->
-    <template v-if="!backendModeEnabled" #footer>
+    <template v-if="!backendModeEnabled && !xsciSsoOnlyLogin" #footer>
       <p class="text-gray-500 dark:text-dark-400">
         {{ t('auth.dontHaveAccount') }}
         <router-link
@@ -251,6 +290,7 @@ import type {
 } from '@/types'
 import { extractI18nErrorMessage } from '@/utils/apiError'
 import { clearAllAffiliateReferralCodes } from '@/utils/oauthAffiliate'
+import { isXSciOIDCProvider, normalizeOIDCProviderName } from '@/utils/oidcProviderName'
 
 const { t } = useI18n()
 const LOGIN_AGREEMENT_STORAGE_KEY = 'sub2api_login_agreement_consent'
@@ -361,6 +401,10 @@ const showOAuthLogin = computed(
       githubOAuthEnabled.value ||
       googleOAuthEnabled.value)
 )
+const normalizedOIDCProviderName = computed(() => normalizeOIDCProviderName(oidcOAuthProviderName.value))
+const xsciSsoOnlyLogin = computed(
+  () => !backendModeEnabled.value && oidcOAuthEnabled.value && isXSciOIDCProvider(oidcOAuthProviderName.value)
+)
 
 watch(validationToastMessage, (value, previousValue) => {
   if (value && value !== previousValue) {
@@ -395,7 +439,7 @@ onMounted(async () => {
     wechatOAuthEnabled.value = isWeChatWebOAuthEnabled(settings)
     backendModeEnabled.value = settings.backend_mode_enabled
     oidcOAuthEnabled.value = settings.oidc_oauth_enabled
-    oidcOAuthProviderName.value = settings.oidc_oauth_provider_name || 'OIDC'
+    oidcOAuthProviderName.value = normalizeOIDCProviderName(settings.oidc_oauth_provider_name)
     githubOAuthEnabled.value = settings.github_oauth_enabled
     googleOAuthEnabled.value = settings.google_oauth_enabled
     backendModeEnabled.value = settings.backend_mode_enabled
