@@ -81,6 +81,10 @@ func (s *AuthService) validateOAuthRegistrationInvitation(ctx context.Context, i
 	return redeemCode, nil
 }
 
+func (s *AuthService) IsInvitationCodeEnabled(ctx context.Context) bool {
+	return s != nil && s.settingService != nil && s.settingService.IsInvitationCodeEnabled(ctx)
+}
+
 // VerifyOAuthEmailCode verifies the locally entered email verification code for
 // third-party signup and binding flows. This is intentionally independent from
 // the global registration email verification toggle.
