@@ -145,6 +145,51 @@ func TestOpsServiceRecordErrorPersistsExplicitAccountAuthStatusZero(t *testing.T
 	require.Contains(t, *captured.UpstreamErrorsJSON, `"stage":"account_auth"`)
 }
 
+func TestOpsServiceRecordErrorBatch_RemovesNULsBeforeJSONBStorage(t *testing.T) {
+	t.Parallel()
+
+	var captured *OpsInsertErrorLogInput
+	repo := &opsRepoMock{
+		InsertErrorLogFn: func(_ context.Context, input *OpsInsertErrorLogInput) (int64, error) {
+			captured = input
+			return 1, nil
+		},
+	}
+	svc := NewOpsService(repo, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+
+	err := svc.RecordErrorBatch(context.Background(), []*OpsInsertErrorLogInput{{
+		RequestID:    "req-\x00bad",
+		ErrorMessage: "message\x00with-nul",
+		ErrorBody:    `{"error":"bad\u0000body"}`,
+		UpstreamErrorMessage: strPtr(
+			"upstream\x00message",
+		),
+		UpstreamErrorDetail: strPtr(`{"detail":"upstream\u0000detail"}`),
+		UpstreamErrors: []*OpsUpstreamErrorEvent{{
+			Platform:             "anthropic\x00",
+			AccountName:          "account\x00name",
+			UpstreamRequestID:    "req_up\x00",
+			UpstreamURL:          "https://api.example.com/\x00messages",
+			Kind:                 "failover\x00",
+			Message:              "event\x00message",
+			Detail:               `{"error":"event\u0000detail"}`,
+			UpstreamResponseBody: `{"output":"response\u0000body"}`,
+		}},
+	}})
+	require.NoError(t, err)
+	require.NotNil(t, captured)
+	require.NotContains(t, captured.RequestID, "\x00")
+	require.NotContains(t, captured.ErrorMessage, "\x00")
+	require.NotContains(t, captured.ErrorBody, "\\u0000")
+	require.NotNil(t, captured.UpstreamErrorMessage)
+	require.NotContains(t, *captured.UpstreamErrorMessage, "\x00")
+	require.NotNil(t, captured.UpstreamErrorDetail)
+	require.NotContains(t, *captured.UpstreamErrorDetail, "\\u0000")
+	require.NotNil(t, captured.UpstreamErrorsJSON)
+	require.NotContains(t, *captured.UpstreamErrorsJSON, "\\u0000")
+	require.NotContains(t, *captured.UpstreamErrorsJSON, "\x00")
+}
+
 func strPtr(v string) *string {
 	return &v
 }
