@@ -113,11 +113,22 @@ type AnthropicImageSource struct {
 
 // AnthropicTool describes a tool available to the model.
 type AnthropicTool struct {
-	Type         string                 `json:"type,omitempty"` // e.g. "web_search_20250305" for server tools
-	Name         string                 `json:"name"`
-	Description  string                 `json:"description,omitempty"`
-	InputSchema  json.RawMessage        `json:"input_schema,omitempty"` // JSON Schema object
-	CacheControl *AnthropicCacheControl `json:"cache_control,omitempty"`
+	Type              string                     `json:"type,omitempty"` // e.g. "web_search_20250305" for server tools
+	Name              string                     `json:"name"`
+	Description       string                     `json:"description,omitempty"`
+	InputSchema       json.RawMessage            `json:"input_schema,omitempty"` // JSON Schema object
+	CacheControl      *AnthropicCacheControl     `json:"cache_control,omitempty"`
+	AllowedDomains    []string                   `json:"allowed_domains,omitempty"`
+	BlockedDomains    []string                   `json:"blocked_domains,omitempty"`
+	Filters           *AnthropicWebSearchFilters `json:"filters,omitempty"`
+	UserLocation      json.RawMessage            `json:"user_location,omitempty"`
+	SearchContextSize string                     `json:"search_context_size,omitempty"`
+	ExternalWebAccess *bool                      `json:"external_web_access,omitempty"`
+}
+
+type AnthropicWebSearchFilters struct {
+	AllowedDomains []string `json:"allowed_domains,omitempty"`
+	BlockedDomains []string `json:"blocked_domains,omitempty"`
 }
 
 // AnthropicCacheControl 对应 Anthropic API 的 cache_control 字段。
@@ -317,18 +328,33 @@ type ResponsesContentPart struct {
 	ImageURL              string          `json:"image_url,omitempty"` // data URI for input_image
 
 	// input_file fields.
-	Filename string `json:"filename,omitempty"`
-	FileData string `json:"file_data,omitempty"` // data URI
-	FileID   string `json:"file_id,omitempty"`
+	Filename    string                `json:"filename,omitempty"`
+	FileData    string                `json:"file_data,omitempty"` // data URI
+	FileID      string                `json:"file_id,omitempty"`
+	Annotations []ResponsesAnnotation `json:"annotations,omitempty"`
+}
+
+type ResponsesAnnotation struct {
+	Type        string `json:"type,omitempty"`
+	URL         string `json:"url,omitempty"`
+	Title       string `json:"title,omitempty"`
+	Text        string `json:"text,omitempty"`
+	Snippet     string `json:"snippet,omitempty"`
+	PageContent string `json:"page_content,omitempty"`
+	PageAge     string `json:"page_age,omitempty"`
 }
 
 // ResponsesTool describes a tool in the Responses API.
 type ResponsesTool struct {
-	Type        string          `json:"type"` // "function" | "custom" | "web_search" | "x_search" | "local_shell" etc.
-	Name        string          `json:"name,omitempty"`
-	Description string          `json:"description,omitempty"`
-	Parameters  json.RawMessage `json:"parameters,omitempty"`
-	Strict      *bool           `json:"strict,omitempty"`
+	Type              string                          `json:"type"` // "function" | "custom" | "web_search" | "x_search" | "local_shell" etc.
+	Name              string                          `json:"name,omitempty"`
+	Description       string                          `json:"description,omitempty"`
+	Parameters        json.RawMessage                 `json:"parameters,omitempty"`
+	Strict            *bool                           `json:"strict,omitempty"`
+	Filters           map[string][]string             `json:"filters,omitempty"`
+	UserLocation      *ResponsesWebSearchUserLocation `json:"user_location,omitempty"`
+	SearchContextSize string                          `json:"search_context_size,omitempty"`
+	ExternalWebAccess *bool                           `json:"external_web_access,omitempty"`
 
 	// type=namespace 的子工具列表（tools 与 children 二选一，语义相同）。
 	Tools    []ResponsesTool `json:"tools,omitempty"`
@@ -357,6 +383,14 @@ func (t *ResponsesTool) UnmarshalJSON(data []byte) error {
 	}
 	*t = ResponsesTool(a)
 	return nil
+}
+
+type ResponsesWebSearchUserLocation struct {
+	Type     string `json:"type"`
+	Country  string `json:"country,omitempty"`
+	City     string `json:"city,omitempty"`
+	Region   string `json:"region,omitempty"`
+	Timezone string `json:"timezone,omitempty"`
 }
 
 // ResponsesResponse is the non-streaming response from POST /v1/responses.
@@ -417,7 +451,16 @@ type ResponsesOutput struct {
 	Input string `json:"input,omitempty"`
 
 	// type=web_search_call
-	Action *WebSearchAction `json:"action,omitempty"`
+	Action        *WebSearchAction `json:"action,omitempty"`
+	Results       json.RawMessage  `json:"results,omitempty"`
+	SearchResults json.RawMessage  `json:"search_results,omitempty"`
+	Output        json.RawMessage  `json:"output,omitempty"`
+	Annotations   json.RawMessage  `json:"annotations,omitempty"`
+	Citations     json.RawMessage  `json:"citations,omitempty"`
+	References    json.RawMessage  `json:"references,omitempty"`
+	Sources       json.RawMessage  `json:"sources,omitempty"`
+	SearchQuery   string           `json:"search_query,omitempty"`
+	Query         string           `json:"query,omitempty"`
 }
 
 // MarshalJSON 处理 tool_search_call 项的线上形态（复用 CallID/Arguments 字段）：
