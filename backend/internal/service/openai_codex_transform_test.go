@@ -16,7 +16,7 @@ func TestApplyCodexOAuthTransform_ToolContinuationPreservesInput(t *testing.T) {
 		"model": "gpt-5.2",
 		"input": []any{
 			map[string]any{"type": "item_reference", "id": "ref1", "text": "x"},
-			map[string]any{"type": "function_call_output", "call_id": "call_1", "output": "ok", "id": "o1"},
+			map[string]any{"type": "function_call_output", "call_id": "msg_1", "output": "ok", "id": "o1"},
 		},
 		"tool_choice": "auto",
 	}
@@ -42,7 +42,7 @@ func TestApplyCodexOAuthTransform_ToolContinuationPreservesInput(t *testing.T) {
 	second, ok := input[1].(map[string]any)
 	require.True(t, ok)
 	require.Equal(t, "o1", second["id"])
-	require.Equal(t, "fc_1", second["call_id"])
+	require.Equal(t, "fc_a_msg_1", second["call_id"])
 }
 
 func TestApplyCodexOAuthTransform_MessagesBridgePromptCacheKeyIsHeaderOnly(t *testing.T) {
@@ -333,6 +333,44 @@ func TestApplyCodexOAuthTransform_NormalizesNativeToolCallPairsByType(t *testing
 	require.NotContains(t, search, "id", "the invalid replay item id must be removed, not fabricated")
 	require.Equal(t, "tsc_search", search["call_id"])
 	require.Equal(t, search["call_id"], searchOutput["call_id"])
+}
+
+func TestApplyCodexOAuthTransform_ReservedIDsStayPairedAcrossToolTypes(t *testing.T) {
+	for _, tc := range []struct {
+		callType   string
+		outputType string
+		prefix     string
+	}{
+		{callType: "function_call", outputType: "function_call_output", prefix: "fc_"},
+		{callType: "custom_tool_call", outputType: "custom_tool_call_output", prefix: "ctc_"},
+		{callType: "tool_search_call", outputType: "tool_search_output", prefix: "tsc_"},
+		{callType: "mcp_tool_call", outputType: "mcp_tool_call_output", prefix: "fc_"},
+	} {
+		for _, callID := range []string{"msg_1", "rs_1", "toolu_1"} {
+			t.Run(tc.callType+"/"+callID, func(t *testing.T) {
+				reqBody := map[string]any{
+					"model": "gpt-5.6-sol",
+					"input": []any{
+						map[string]any{"type": tc.callType, "call_id": callID, "name": "shell", "arguments": "{}"},
+						map[string]any{"type": tc.outputType, "call_id": callID, "output": "done"},
+					},
+				}
+
+				result := applyCodexOAuthTransform(reqBody, false, false)
+
+				require.NoError(t, result.Error)
+				input, ok := reqBody["input"].([]any)
+				require.True(t, ok)
+				require.Len(t, input, 2)
+				call, ok := input[0].(map[string]any)
+				require.True(t, ok)
+				output, ok := input[1].(map[string]any)
+				require.True(t, ok)
+				require.Equal(t, tc.prefix+"a_"+callID, call["call_id"])
+				require.Equal(t, call["call_id"], output["call_id"])
+			})
+		}
+	}
 }
 
 func TestApplyCodexOAuthTransform_PreservesNativeCallIDsWhenRequested(t *testing.T) {
