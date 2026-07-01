@@ -232,9 +232,14 @@ func redirectToFrontendCallback(c *gin.Context, frontendCallback string) {
 }
 
 func (h *AuthHandler) createOAuthPendingSession(c *gin.Context, payload oauthPendingSessionPayload) error {
+	_, err := h.createOAuthPendingSessionEntity(c, payload)
+	return err
+}
+
+func (h *AuthHandler) createOAuthPendingSessionEntity(c *gin.Context, payload oauthPendingSessionPayload) (*dbent.PendingAuthSession, error) {
 	svc, err := h.pendingIdentityService()
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	localFlowState := map[string]any{
@@ -263,11 +268,11 @@ func (h *AuthHandler) createOAuthPendingSession(c *gin.Context, payload oauthPen
 			"resolved_email_len", len(strings.TrimSpace(payload.ResolvedEmail)),
 			"has_target_user", payload.TargetUserID != nil,
 			"error", err.Error())
-		return infraerrors.InternalServer("PENDING_AUTH_SESSION_CREATE_FAILED", "failed to create pending auth session").WithCause(err)
+		return nil, infraerrors.InternalServer("PENDING_AUTH_SESSION_CREATE_FAILED", "failed to create pending auth session").WithCause(err)
 	}
 
 	setOAuthPendingSessionCookie(c, session.SessionToken, isRequestHTTPS(c))
-	return nil
+	return session, nil
 }
 
 func readCompletionResponse(session map[string]any) (map[string]any, bool) {
@@ -328,6 +333,18 @@ func pendingSessionStringValue(values map[string]any, key string) string {
 		return ""
 	}
 	return strings.TrimSpace(value)
+}
+
+func pendingSessionBoolValue(values map[string]any, key string) bool {
+	if len(values) == 0 {
+		return false
+	}
+	raw, ok := values[key]
+	if !ok {
+		return false
+	}
+	value, ok := raw.(bool)
+	return ok && value
 }
 
 func pendingSessionWantsInvitation(payload map[string]any) bool {
@@ -1945,6 +1962,14 @@ func (h *AuthHandler) ExchangePendingOAuthCompletion(c *gin.Context) {
 		if _, exists := payload["redirect"]; !exists {
 			payload["redirect"] = session.RedirectTo
 		}
+	}
+	if strings.EqualFold(strings.TrimSpace(session.ProviderType), "oidc") &&
+		pendingSessionBoolValue(payload, "auto_complete_registration") {
+		h.completeOIDCOAuthRegistrationSession(c, session, completeOIDCOAuthRequest{
+			AdoptDisplayName: adoptionDecision.AdoptDisplayName,
+			AdoptAvatar:      adoptionDecision.AdoptAvatar,
+		}, true, clearCookies)
+		return
 	}
 	applySuggestedProfileToCompletionResponse(payload, session.UpstreamIdentityClaims)
 
