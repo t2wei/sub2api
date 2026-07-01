@@ -1320,3 +1320,27 @@ image_storage:
   presign_expiry_hours: 24
   # 当上游返回的是图片 url 时，下载该图片再转存的字节上限（默认 32MB）
   max_download_bytes: 33554432
+
+# =============================================================================
+# [OXSCI] LLM Logging Configuration
+# [OXSCI] LLM 调用日志配置
+# =============================================================================
+# Enable logging of LLM calls to data-service for monitoring and analytics.
+# 启用 LLM 调用日志记录，用于监控和分析。
+llm_logging:
+  # Enable LLM call logging
+  # 启用 LLM 调用日志记录
+  enabled: false
+  # data-service LLM logging API endpoint
+  # data-service LLM 日志 API 端点
+  # Example: "http://data-service:8001/api/v1/llm-calls"
+  url: ""
+  # Agent name for identifying the log source
+  # 代理名称（用于标识日志来源）
+  agent_name: "sub2api"
+  # [OXSCI] API Key for accessing services via Lambda Proxy
+  # [OXSCI] 通过 Lambda Proxy 访问服务的 API Key
+  api_key: ""
+  # HTTP request timeout in seconds
+  # HTTP 请求超时时间（秒）
+  timeout_seconds: 10

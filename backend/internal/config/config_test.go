@@ -2399,6 +2399,16 @@ func TestValidateConfig_AutoScaleDisabledIgnoreAutoScaleFields(t *testing.T) {
 	}
 }
 
+func TestLoadConfig_Sub2APILogLevelOverridesLogLevel(t *testing.T) {
+	resetViperWithJWTSecret(t)
+	t.Setenv("LOG_LEVEL", "error")
+	t.Setenv("SUB2API_LOG_LEVEL", "DEBUG")
+
+	cfg, err := Load()
+	require.NoError(t, err)
+	require.Equal(t, "debug", cfg.Log.Level)
+}
+
 func TestValidateConfig_LogRequiredAndRotationBounds(t *testing.T) {
 	resetViperWithJWTSecret(t)
 
