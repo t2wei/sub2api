@@ -19,7 +19,8 @@ import (
 var ErrOpsDisabled = infraerrors.NotFound("OPS_DISABLED", "Ops monitoring is disabled")
 
 const (
-	opsMaxStoredErrorBodyBytes = 20 * 1024
+	opsMaxStoredRequestBodyBytes = 256 * 1024
+	opsMaxStoredErrorBodyBytes   = 20 * 1024
 	// OpsErrorLogQueueBodyMaxBytes bounds attacker-controlled response data while
 	// it waits in the asynchronous error-log queue.
 	OpsErrorLogQueueBodyMaxBytes = 8 * 1024
@@ -29,6 +30,22 @@ const (
 	opsRuntimeSettingsRefreshTimeout  = 3 * time.Second
 	opsRuntimeSettingsFailureLogEvery = time.Minute
 )
+
+// PrepareOpsRequestBodyForQueue sanitizes and trims request bodies before they
+// enter async queues, avoiding large raw payload retention during error storms.
+func PrepareOpsRequestBodyForQueue(raw []byte) (requestBodyJSON *string, truncated bool, requestBodyBytes *int) {
+	if len(raw) == 0 {
+		return nil, false, nil
+	}
+	sanitized, truncated, bytesLen := sanitizeAndTrimRequestBody(raw, opsMaxStoredRequestBodyBytes)
+	if sanitized != "" {
+		out := sanitized
+		requestBodyJSON = &out
+	}
+	n := bytesLen
+	requestBodyBytes = &n
+	return requestBodyJSON, truncated, requestBodyBytes
+}
 
 type opsRuntimeSettingsSnapshot struct {
 	monitoringEnabled bool
@@ -471,8 +488,30 @@ func (s *OpsService) prepareErrorLogInput(ctx context.Context, entry *OpsInsertE
 	}
 
 	// Ensure required fields exist (DB has NOT NULL constraints).
-	entry.ErrorPhase = strings.TrimSpace(entry.ErrorPhase)
-	entry.ErrorType = strings.TrimSpace(entry.ErrorType)
+	entry.RequestID = sanitizePostgresText(strings.TrimSpace(entry.RequestID))
+	entry.ClientRequestID = sanitizePostgresText(strings.TrimSpace(entry.ClientRequestID))
+	entry.Platform = sanitizePostgresText(strings.TrimSpace(entry.Platform))
+	entry.Model = sanitizePostgresText(strings.TrimSpace(entry.Model))
+	entry.RequestPath = sanitizePostgresText(strings.TrimSpace(entry.RequestPath))
+	entry.InboundEndpoint = sanitizePostgresText(strings.TrimSpace(entry.InboundEndpoint))
+	entry.UpstreamEndpoint = sanitizePostgresText(strings.TrimSpace(entry.UpstreamEndpoint))
+	entry.RequestedModel = sanitizePostgresText(strings.TrimSpace(entry.RequestedModel))
+	entry.UpstreamModel = sanitizePostgresText(strings.TrimSpace(entry.UpstreamModel))
+	entry.UserAgent = sanitizePostgresText(strings.TrimSpace(entry.UserAgent))
+	entry.ErrorPhase = sanitizePostgresText(strings.TrimSpace(entry.ErrorPhase))
+	entry.ErrorType = sanitizePostgresText(strings.TrimSpace(entry.ErrorType))
+	entry.Severity = sanitizePostgresText(strings.TrimSpace(entry.Severity))
+	entry.ErrorMessage = sanitizePostgresText(strings.TrimSpace(entry.ErrorMessage))
+	entry.ErrorSource = sanitizePostgresText(strings.TrimSpace(entry.ErrorSource))
+	entry.ErrorOwner = sanitizePostgresText(strings.TrimSpace(entry.ErrorOwner))
+	if entry.ClientIP != nil {
+		clientIP := sanitizePostgresText(strings.TrimSpace(*entry.ClientIP))
+		if clientIP == "" {
+			entry.ClientIP = nil
+		} else {
+			entry.ClientIP = &clientIP
+		}
+	}
 	if entry.ErrorPhase == "" {
 		entry.ErrorPhase = "internal"
 	}
@@ -520,6 +559,7 @@ func (s *OpsService) prepareErrorLogInput(ctx context.Context, entry *OpsInsertE
 	if entry.UpstreamErrorMessage != nil {
 		msg := strings.TrimSpace(*entry.UpstreamErrorMessage)
 		msg = sanitizeUpstreamErrorMessage(msg)
+		msg = sanitizePostgresText(msg)
 		msg = truncateString(msg, 2048)
 		if strings.TrimSpace(msg) == "" {
 			entry.UpstreamErrorMessage = nil
@@ -566,19 +606,19 @@ func sanitizeOpsUpstreamErrors(entry *OpsInsertErrorLogInput) error {
 		}
 		out := *ev
 
-		out.Platform = truncateString(strings.TrimSpace(out.Platform), 32)
-		out.AccountName = truncateString(strings.TrimSpace(out.AccountName), 128)
-		out.UpstreamRequestID = truncateString(strings.TrimSpace(out.UpstreamRequestID), 128)
-		out.UpstreamURL = truncateString(strings.TrimSpace(out.UpstreamURL), 2048)
-		if body := strings.TrimSpace(out.UpstreamResponseBody); body != "" {
+		out.Platform = truncateString(sanitizePostgresText(strings.TrimSpace(out.Platform)), 32)
+		out.AccountName = truncateString(sanitizePostgresText(strings.TrimSpace(out.AccountName)), 128)
+		out.UpstreamRequestID = truncateString(sanitizePostgresText(strings.TrimSpace(out.UpstreamRequestID)), 128)
+		out.UpstreamURL = truncateString(sanitizePostgresText(strings.TrimSpace(out.UpstreamURL)), 2048)
+		if body := sanitizePostgresText(strings.TrimSpace(out.UpstreamResponseBody)); body != "" {
 			out.UpstreamResponseBody, _ = sanitizeErrorBodyForStorage(body, OpsErrorLogQueueBodyMaxBytes)
 		} else {
 			out.UpstreamResponseBody = ""
 		}
-		out.Kind = truncateString(strings.TrimSpace(out.Kind), 64)
-		out.Stage = truncateString(strings.TrimSpace(out.Stage), 64)
-		out.Scope = truncateString(strings.TrimSpace(out.Scope), 64)
-		out.Reason = truncateString(strings.TrimSpace(out.Reason), 128)
+		out.Kind = truncateString(sanitizePostgresText(strings.TrimSpace(out.Kind)), 64)
+		out.Stage = truncateString(sanitizePostgresText(strings.TrimSpace(out.Stage)), 64)
+		out.Scope = truncateString(sanitizePostgresText(strings.TrimSpace(out.Scope)), 64)
+		out.Reason = truncateString(sanitizePostgresText(strings.TrimSpace(out.Reason)), 128)
 
 		if out.AccountID < 0 {
 			out.AccountID = 0
@@ -591,10 +631,11 @@ func sanitizeOpsUpstreamErrors(entry *OpsInsertErrorLogInput) error {
 		}
 
 		msg := sanitizeUpstreamErrorMessage(strings.TrimSpace(out.Message))
+		msg = sanitizePostgresText(msg)
 		msg = truncateString(msg, 2048)
 		out.Message = msg
 
-		detail := strings.TrimSpace(out.Detail)
+		detail := sanitizePostgresText(strings.TrimSpace(out.Detail))
 		if detail != "" {
 			// Keep upstream detail small while the event waits in the queue.
 			sanitizedDetail, _ := sanitizeErrorBodyForStorage(detail, OpsErrorLogQueueBodyMaxBytes)
@@ -812,6 +853,10 @@ func sanitizeAndTrimJSONPayload(raw []byte, maxBytes int) (jsonString string, tr
 	return string(encoded4), true, bytesLen
 }
 
+func sanitizeAndTrimRequestBody(raw []byte, maxBytes int) (jsonString string, truncated bool, bytesLen int) {
+	return sanitizeAndTrimJSONPayload(raw, maxBytes)
+}
+
 func redactSensitiveJSON(v any) any {
 	switch t := v.(type) {
 	case map[string]any:
@@ -830,9 +875,18 @@ func redactSensitiveJSON(v any) any {
 			out = append(out, redactSensitiveJSON(vv))
 		}
 		return out
+	case string:
+		return sanitizePostgresText(t)
 	default:
 		return v
 	}
+}
+
+func sanitizePostgresText(s string) string {
+	if s == "" || !strings.ContainsRune(s, '\x00') {
+		return s
+	}
+	return strings.ReplaceAll(s, "\x00", "")
 }
 
 func isSensitiveKey(key string) bool {
@@ -1043,7 +1097,7 @@ func shallowCopyMap(m map[string]any) map[string]any {
 }
 
 func sanitizeErrorBodyForStorage(raw string, maxBytes int) (sanitized string, truncated bool) {
-	raw = strings.TrimSpace(raw)
+	raw = sanitizePostgresText(strings.TrimSpace(raw))
 	if raw == "" {
 		return "", false
 	}

@@ -879,6 +879,15 @@ func (s *SettingService) GetClaudeCodeVersionBounds(ctx context.Context) (min, m
 			SettingKeyMaxClaudeCodeVersion,
 		})
 		if err != nil {
+			if errors.Is(err, ErrSettingNotFound) {
+				// 配置项不存在是正常的默认状态，不检查版本。
+				versionBoundsCache.Store(&cachedVersionBounds{
+					min:       "",
+					max:       "",
+					expiresAt: time.Now().Add(versionBoundsCacheTTL).UnixNano(),
+				})
+				return bounds{"", ""}, nil
+			}
 			// fail-open: DB 错误时不阻塞请求，但记录日志并使用短 TTL 快速重试
 			slog.Warn("failed to get claude code version bounds setting, skipping version check", "error", err)
 			versionBoundsCache.Store(&cachedVersionBounds{
