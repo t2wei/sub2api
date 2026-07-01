@@ -190,6 +190,22 @@ func TestGatewayService_AnthropicAPIKeyPassthrough_ForwardStreamPreservesBodyAnd
 	require.Empty(t, rec.Header().Get("Set-Cookie"), "响应头应经过安全过滤")
 }
 
+func TestGatewayService_AnthropicAPIKeyPassthrough_ForwardCountTokensStripsGenerationFields(t *testing.T) {
+	body := []byte(`{"model":"claude-opus-4-7","messages":[{"role":"user","content":[{"type":"text","text":"hello"}]}],"temperature":0.7,"top_p":0.8,"top_k":5,"max_tokens":1024,"stop_sequences":["stop"],"stream":true,"thinking":{"type":"enabled"}}`)
+
+	got := sanitizeCountTokensRequestBody(body)
+
+	require.False(t, gjson.GetBytes(got, "temperature").Exists())
+	require.False(t, gjson.GetBytes(got, "top_p").Exists())
+	require.False(t, gjson.GetBytes(got, "top_k").Exists())
+	require.False(t, gjson.GetBytes(got, "max_tokens").Exists())
+	require.False(t, gjson.GetBytes(got, "stop_sequences").Exists())
+	require.False(t, gjson.GetBytes(got, "stream").Exists())
+	require.Equal(t, "claude-opus-4-7", gjson.GetBytes(got, "model").String())
+	require.Equal(t, "hello", gjson.GetBytes(got, "messages.0.content.0.text").String())
+	require.Equal(t, "enabled", gjson.GetBytes(got, "thinking.type").String())
+}
+
 func TestGatewayService_AnthropicAPIKeyPassthrough_ForwardCountTokensPreservesBody(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
@@ -477,7 +493,7 @@ func TestGatewayService_AnthropicAPIKeyPassthrough_ModelMappingPreservesOtherFie
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages/count_tokens", nil)
 
 	// 包含复杂字段的请求体：system、thinking、messages
-	body := []byte(`{"model":"claude-sonnet-4-20250514","system":[{"type":"text","text":"You are a helpful assistant."}],"messages":[{"role":"user","content":[{"type":"text","text":"hello world"}]}],"thinking":{"type":"enabled","budget_tokens":5000},"max_tokens":1024}`)
+	body := []byte(`{"model":"claude-sonnet-4-20250514","system":[{"type":"text","text":"You are a helpful assistant."}],"messages":[{"role":"user","content":[{"type":"text","text":"hello world"}]}],"thinking":{"type":"enabled","budget_tokens":5000},"max_tokens":1024,"temperature":0.7}`)
 	parsed := &ParsedRequest{
 		Body:  NewRequestBodyRef(body),
 		Model: "claude-sonnet-4-20250514",
@@ -525,6 +541,7 @@ func TestGatewayService_AnthropicAPIKeyPassthrough_ModelMappingPreservesOtherFie
 	require.Equal(t, int64(5000), gjson.GetBytes(sentBody, "thinking.budget_tokens").Int(), "thinking.budget_tokens 不应被修改")
 	require.False(t, gjson.GetBytes(sentBody, "max_tokens").Exists(),
 		"max_tokens 作为生成参数应被 count_tokens 过滤剥离")
+	require.False(t, gjson.GetBytes(sentBody, "temperature").Exists(), "count_tokens 不应转发 temperature")
 }
 
 func TestGatewayService_AnthropicAPIKeyPassthrough_CountTokensFiltersGenerationFields(t *testing.T) {
