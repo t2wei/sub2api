@@ -100,7 +100,7 @@ func normalizeCodexCallID(id string) string {
 	case strings.HasPrefix(id, "call_"):
 		candidate = codexCallIDPrefix + strings.TrimPrefix(id, "call_")
 	default:
-		candidate = codexCallIDPrefix + id
+		candidate = codexCallIDPrefix + "a_" + id
 	}
 	if len(candidate) <= codexCallIDMaxLength {
 		return candidate
@@ -1405,8 +1405,9 @@ func filterCodexInputWithOptions(input []any, opts codexInputFilterOptions) []an
 			continue
 		}
 
-		// 仅修正真正的 tool/function call 标识，避免误改普通 message/reasoning id；
-		// 若 item_reference 指向 legacy call_* 标识，则仅修正该引用本身。
+		// 仅修正真正的 tool/function call 标识，避免误改普通 message/reasoning id。
+		// 非 legacy call_* 标识使用 fc_a_，避免原始 ID 含 OpenAI 保留前缀
+		// （如 msg_）时产生被上游拒绝的复合 ID。
 		fixCallIDPrefix := func(id string) string {
 			if opts.PreserveCallIDs {
 				// preserve 模式尽量原样透传客户端 id 以维持 tool_use/tool_result

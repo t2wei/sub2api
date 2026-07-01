@@ -61,10 +61,7 @@ func ResponsesToAnthropic(resp *ResponsesResponse, model string) *AnthropicRespo
 			})
 		case "web_search_call":
 			toolUseID := "srvtoolu_" + item.ID
-			query := ""
-			if item.Action != nil {
-				query = item.Action.Query
-			}
+			query := webSearchQueryFromResponsesItem(item)
 			inputJSON, _ := json.Marshal(map[string]string{"query": query})
 			blocks = append(blocks, AnthropicContentBlock{
 				Type:  "server_tool_use",
@@ -72,11 +69,10 @@ func ResponsesToAnthropic(resp *ResponsesResponse, model string) *AnthropicRespo
 				Name:  "web_search",
 				Input: inputJSON,
 			})
-			emptyResults, _ := json.Marshal([]struct{}{})
 			blocks = append(blocks, AnthropicContentBlock{
 				Type:      "web_search_tool_result",
 				ToolUseID: toolUseID,
-				Content:   emptyResults,
+				Content:   webSearchResultContentForResponsesItem(item, resp),
 			})
 		}
 	}
@@ -116,6 +112,207 @@ func anthropicUsageFromResponsesUsage(usage *ResponsesUsage) AnthropicUsage {
 		CacheReadInputTokens:     cachedTokens,
 		CacheCreationInputTokens: usage.CacheCreationInputTokens,
 	}
+}
+
+func webSearchQueryFromResponsesItem(item ResponsesOutput) string {
+	if item.Action != nil && strings.TrimSpace(item.Action.Query) != "" {
+		return item.Action.Query
+	}
+	if strings.TrimSpace(item.SearchQuery) != "" {
+		return item.SearchQuery
+	}
+	return item.Query
+}
+
+func webSearchResultContentForResponsesItem(item ResponsesOutput, resp *ResponsesResponse) json.RawMessage {
+	results := extractWebSearchResultBlocksFromResponsesItem(item)
+	if len(results) == 0 && resp != nil {
+		results = extractWebSearchResultBlocksFromResponseAnnotations(resp)
+	}
+	if len(results) == 0 {
+		emptyResults, _ := json.Marshal([]struct{}{})
+		return emptyResults
+	}
+	content, err := json.Marshal(results)
+	if err != nil {
+		emptyResults, _ := json.Marshal([]struct{}{})
+		return emptyResults
+	}
+	return content
+}
+
+func extractWebSearchResultBlocksFromResponsesItem(item ResponsesOutput) []map[string]string {
+	var results []map[string]string
+	for _, raw := range []json.RawMessage{
+		item.Results,
+		item.SearchResults,
+		item.Output,
+		item.Annotations,
+		item.Citations,
+		item.References,
+		item.Sources,
+	} {
+		results = append(results, extractWebSearchResultBlocksFromRaw(raw)...)
+	}
+	return dedupeWebSearchResultBlocks(results)
+}
+
+func extractWebSearchResultBlocksFromResponseAnnotations(resp *ResponsesResponse) []map[string]string {
+	if resp == nil {
+		return nil
+	}
+	var results []map[string]string
+	for _, item := range resp.Output {
+		if item.Type != "message" {
+			continue
+		}
+		for _, part := range item.Content {
+			for _, annotation := range part.Annotations {
+				if result := webSearchResultBlockFromAnnotation(annotation); len(result) > 0 {
+					results = append(results, result)
+				}
+			}
+		}
+	}
+	return dedupeWebSearchResultBlocks(results)
+}
+
+func extractWebSearchResultBlocksFromRaw(raw json.RawMessage) []map[string]string {
+	if len(raw) == 0 || string(raw) == "null" {
+		return nil
+	}
+	var list []map[string]any
+	if err := json.Unmarshal(raw, &list); err == nil {
+		results := make([]map[string]string, 0, len(list))
+		for _, item := range list {
+			if result := webSearchResultBlockFromMap(item); len(result) > 0 {
+				results = append(results, result)
+			}
+		}
+		return results
+	}
+	var object map[string]any
+	if err := json.Unmarshal(raw, &object); err != nil {
+		return nil
+	}
+	if nested := webSearchNestedResults(object); len(nested) > 0 {
+		return nested
+	}
+	if result := webSearchResultBlockFromMap(object); len(result) > 0 {
+		return []map[string]string{result}
+	}
+	return nil
+}
+
+func webSearchNestedResults(object map[string]any) []map[string]string {
+	for _, key := range []string{"results", "search_results", "annotations", "citations", "references", "sources", "content"} {
+		value, ok := object[key]
+		if !ok || value == nil {
+			continue
+		}
+		raw, err := json.Marshal(value)
+		if err != nil {
+			continue
+		}
+		if results := extractWebSearchResultBlocksFromRaw(raw); len(results) > 0 {
+			return results
+		}
+	}
+	return nil
+}
+
+func webSearchResultBlockFromAnnotation(annotation ResponsesAnnotation) map[string]string {
+	result := map[string]string{}
+	url := strings.TrimSpace(annotation.URL)
+	if url == "" {
+		return nil
+	}
+	result["type"] = "web_search_result"
+	result["url"] = url
+	if title := strings.TrimSpace(annotation.Title); title != "" {
+		result["title"] = title
+	}
+	content := firstNonEmptyWebSearchString(annotation.PageContent, annotation.Snippet, annotation.Text)
+	if content = strings.TrimSpace(content); content != "" {
+		result["page_content"] = content
+	}
+	if pageAge := strings.TrimSpace(annotation.PageAge); pageAge != "" {
+		result["page_age"] = pageAge
+	}
+	return result
+}
+
+func webSearchResultBlockFromMap(item map[string]any) map[string]string {
+	url := strings.TrimSpace(firstStringFromAny(item["url"], item["uri"], item["link"]))
+	if url == "" {
+		return nil
+	}
+	result := map[string]string{
+		"type": "web_search_result",
+		"url":  url,
+	}
+	if title := strings.TrimSpace(firstStringFromAny(item["title"], item["name"])); title != "" {
+		result["title"] = title
+	}
+	content := strings.TrimSpace(firstStringFromAny(
+		item["page_content"],
+		item["snippet"],
+		item["text"],
+		item["content"],
+		item["summary"],
+	))
+	if content != "" {
+		result["page_content"] = content
+	}
+	if pageAge := strings.TrimSpace(firstStringFromAny(item["page_age"], item["pageAge"])); pageAge != "" {
+		result["page_age"] = pageAge
+	}
+	return result
+}
+
+func firstNonEmptyWebSearchString(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func firstStringFromAny(values ...any) string {
+	for _, value := range values {
+		switch v := value.(type) {
+		case string:
+			if strings.TrimSpace(v) != "" {
+				return v
+			}
+		case map[string]any:
+			if text := firstStringFromAny(v["text"], v["value"]); strings.TrimSpace(text) != "" {
+				return text
+			}
+		}
+	}
+	return ""
+}
+
+func dedupeWebSearchResultBlocks(results []map[string]string) []map[string]string {
+	if len(results) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(results))
+	out := make([]map[string]string, 0, len(results))
+	for _, result := range results {
+		url := result["url"]
+		if url == "" {
+			continue
+		}
+		if _, ok := seen[url]; ok {
+			continue
+		}
+		seen[url] = struct{}{}
+		out = append(out, result)
+	}
+	return out
 }
 
 func responsesStatusToAnthropicStopReason(status string, details *ResponsesIncompleteDetails, blocks []AnthropicContentBlock) string {
@@ -575,11 +772,9 @@ func resToAnthHandleWebSearchDone(evt *ResponsesStreamEvent, state *ResponsesEve
 	events = append(events, closeCurrentBlock(state)...)
 
 	toolUseID := "srvtoolu_" + evt.Item.ID
-	query := ""
-	if evt.Item.Action != nil {
-		query = evt.Item.Action.Query
-	}
+	query := webSearchQueryFromResponsesItem(*evt.Item)
 	inputJSON, _ := json.Marshal(map[string]string{"query": query})
+	resultContent := webSearchResultContentForResponsesItem(*evt.Item, nil)
 
 	// Emit server_tool_use block (start + stop).
 	idx1 := state.ContentBlockIndex
@@ -600,9 +795,6 @@ func resToAnthHandleWebSearchDone(evt *ResponsesStreamEvent, state *ResponsesEve
 	state.ContentBlockIndex++
 
 	// Emit web_search_tool_result block (start + stop).
-	// Content is empty because OpenAI does not expose individual search results;
-	// the model consumes them internally and produces text output.
-	emptyResults, _ := json.Marshal([]struct{}{})
 	idx2 := state.ContentBlockIndex
 	events = append(events, AnthropicStreamEvent{
 		Type:  "content_block_start",
@@ -610,7 +802,7 @@ func resToAnthHandleWebSearchDone(evt *ResponsesStreamEvent, state *ResponsesEve
 		ContentBlock: &AnthropicContentBlock{
 			Type:      "web_search_tool_result",
 			ToolUseID: toolUseID,
-			Content:   emptyResults,
+			Content:   resultContent,
 		},
 	})
 	events = append(events, AnthropicStreamEvent{

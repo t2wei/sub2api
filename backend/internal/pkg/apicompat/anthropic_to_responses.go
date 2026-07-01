@@ -3,6 +3,7 @@ package apicompat
 import (
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"strings"
 )
 
@@ -337,11 +338,18 @@ func toResponsesCallID(id string) string {
 	return id
 }
 
+// responsesCallIDPrefix is a legacy prefix previously added when converting
+// Anthropic tool IDs to Responses call_id values.
+const responsesCallIDPrefix = "fc_a_"
+
 // fromResponsesCallID reverses old prefixed IDs while preserving current IDs.
 func fromResponsesCallID(id string) string {
+	if after, ok := strings.CutPrefix(id, responsesCallIDPrefix); ok {
+		return after
+	}
+	// Legacy compat: also try stripping bare "fc_" for IDs that were
+	// generated before the prefix change.
 	if after, ok := strings.CutPrefix(id, "fc_"); ok {
-		// Only strip if the remainder doesn't look like it was already "fc_" prefixed.
-		// E.g. "fc_toolu_xxx" → "toolu_xxx", "fc_call_xxx" → "call_xxx"
 		if strings.HasPrefix(after, "toolu_") || strings.HasPrefix(after, "call_") {
 			return after
 		}
@@ -445,9 +453,8 @@ func mapAnthropicEffortToResponses(effort string) string {
 func convertAnthropicToolsToResponses(tools []AnthropicTool) []ResponsesTool {
 	var out []ResponsesTool
 	for _, t := range tools {
-		// Anthropic server tools like "web_search_20250305" → OpenAI {"type":"web_search"}
-		if strings.HasPrefix(t.Type, "web_search") {
-			out = append(out, ResponsesTool{Type: "web_search"})
+		if isAnthropicWebSearchTool(t) {
+			out = append(out, convertAnthropicWebSearchToolToResponses(t))
 			continue
 		}
 		out = append(out, ResponsesTool{
@@ -471,6 +478,139 @@ func boolPtr(v bool) *bool {
 // "Unsupported parameter: temperature" if these fields are present.
 func isReasoningModel(model string) bool {
 	return strings.HasPrefix(model, "gpt-5")
+}
+
+func isAnthropicWebSearchTool(tool AnthropicTool) bool {
+	return strings.HasPrefix(tool.Type, "web_search") || tool.Name == "web_search"
+}
+
+func convertAnthropicWebSearchToolToResponses(tool AnthropicTool) ResponsesTool {
+	out := ResponsesTool{Type: "web_search"}
+	filters := map[string][]string{}
+	if tool.Filters != nil {
+		if domains := normalizeOpenAIWebSearchDomains(tool.Filters.AllowedDomains); len(domains) > 0 {
+			filters["allowed_domains"] = appendUniqueStrings(filters["allowed_domains"], domains...)
+		}
+		if domains := normalizeOpenAIWebSearchDomains(tool.Filters.BlockedDomains); len(domains) > 0 {
+			filters["blocked_domains"] = appendUniqueStrings(filters["blocked_domains"], domains...)
+		}
+	}
+	if domains := normalizeOpenAIWebSearchDomains(tool.AllowedDomains); len(domains) > 0 {
+		filters["allowed_domains"] = appendUniqueStrings(filters["allowed_domains"], domains...)
+	}
+	if domains := normalizeOpenAIWebSearchDomains(tool.BlockedDomains); len(domains) > 0 {
+		filters["blocked_domains"] = appendUniqueStrings(filters["blocked_domains"], domains...)
+	}
+	if len(filters) > 0 {
+		out.Filters = filters
+	}
+	if userLocation := normalizeOpenAIWebSearchUserLocation(tool.UserLocation); userLocation != nil {
+		out.UserLocation = userLocation
+	}
+	switch tool.SearchContextSize {
+	case "low", "medium", "high":
+		out.SearchContextSize = tool.SearchContextSize
+	}
+	if tool.ExternalWebAccess != nil {
+		out.ExternalWebAccess = tool.ExternalWebAccess
+	}
+	return out
+}
+
+func normalizeOpenAIWebSearchDomains(values []string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	domains := make([]string, 0, len(values))
+	for _, value := range values {
+		domain := normalizeOpenAIWebSearchDomain(value)
+		if domain == "" {
+			continue
+		}
+		domains = appendUniqueStrings(domains, domain)
+	}
+	return domains
+}
+
+func normalizeOpenAIWebSearchDomain(value string) string {
+	rawValue := strings.TrimSpace(value)
+	if rawValue == "" {
+		return ""
+	}
+	parseValue := rawValue
+	if !strings.Contains(parseValue, "://") {
+		parseValue = "https://" + parseValue
+	}
+	parsed, err := url.Parse(parseValue)
+	domain := ""
+	if err == nil {
+		domain = parsed.Host
+		if domain == "" {
+			domain = parsed.Path
+		}
+	}
+	if domain == "" {
+		domain = rawValue
+	}
+	domain = strings.SplitN(domain, "/", 2)[0]
+	domain = strings.Trim(strings.ToLower(domain), " .")
+	return domain
+}
+
+func appendUniqueStrings(values []string, additions ...string) []string {
+	for _, addition := range additions {
+		if addition == "" {
+			continue
+		}
+		seen := false
+		for _, value := range values {
+			if value == addition {
+				seen = true
+				break
+			}
+		}
+		if !seen {
+			values = append(values, addition)
+		}
+	}
+	return values
+}
+
+func normalizeOpenAIWebSearchUserLocation(raw json.RawMessage) *ResponsesWebSearchUserLocation {
+	if len(raw) == 0 || string(raw) == "null" {
+		return nil
+	}
+	var location map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &location); err != nil || len(location) == 0 {
+		return nil
+	}
+	source := location
+	if approximateRaw, ok := location["approximate"]; ok && len(approximateRaw) > 0 && string(approximateRaw) != "null" {
+		var approximate map[string]json.RawMessage
+		if err := json.Unmarshal(approximateRaw, &approximate); err == nil && len(approximate) > 0 {
+			source = approximate
+		}
+	}
+	out := &ResponsesWebSearchUserLocation{Type: "approximate"}
+	out.Country = trimJSONString(source["country"])
+	out.City = trimJSONString(source["city"])
+	out.Region = trimJSONString(source["region"])
+	out.Timezone = trimJSONString(source["timezone"])
+	if out.Country == "" && out.City == "" && out.Region == "" && out.Timezone == "" {
+		return nil
+	}
+	return out
+}
+
+func trimJSONString(raw json.RawMessage) string {
+	if len(raw) == 0 || string(raw) == "null" {
+		return ""
+	}
+	var value string
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(value)
 }
 
 // normalizeToolParameters ensures the tool parameter schema is valid for
