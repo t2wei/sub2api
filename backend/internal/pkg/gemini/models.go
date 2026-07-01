@@ -2,7 +2,9 @@
 // It is used when upstream model listing is unavailable (e.g. OAuth token missing AI Studio scopes).
 package gemini
 
-import "strings"
+import (
+	"strings"
+)
 
 type Model struct {
 	Name                       string   `json:"name"`
@@ -16,25 +18,29 @@ type ModelsListResponse struct {
 }
 
 func DefaultModels() []Model {
-	methods := []string{"generateContent", "streamGenerateContent"}
+	chatMethods := []string{"generateContent", "streamGenerateContent"}
+	embeddingMethods := []string{"embedContent", "batchEmbedContents"}
 	return []Model{
-		{Name: "models/gemini-3.1-flash-image", SupportedGenerationMethods: methods},
-		{Name: "models/gemini-3.1-flash-image-preview", SupportedGenerationMethods: methods},
-		{Name: "models/gemini-3.1-flash-lite-image", SupportedGenerationMethods: methods},
-		{Name: "models/gemini-3-pro-image", SupportedGenerationMethods: methods},
-		{Name: "models/gemini-3-pro-image-preview", SupportedGenerationMethods: methods},
-		{Name: "models/gemini-3-flash", SupportedGenerationMethods: methods},
-		{Name: "models/gemini-3-flash-preview", SupportedGenerationMethods: methods},
-		{Name: "models/gemini-3.1-pro-preview", SupportedGenerationMethods: methods},
-		{Name: "models/gemini-3.1-pro-preview-customtools", SupportedGenerationMethods: methods},
-		{Name: "models/gemini-3.1-flash-lite", SupportedGenerationMethods: methods},
-		{Name: "models/gemini-3.1-flash-lite-preview", SupportedGenerationMethods: methods},
-		{Name: "models/gemini-3.5-flash", SupportedGenerationMethods: methods},
-		{Name: "models/gemini-3.5-flash-lite", SupportedGenerationMethods: methods},
-		{Name: "models/gemini-3.6-flash", SupportedGenerationMethods: methods},
-		{Name: "models/gemini-3.7-flash", SupportedGenerationMethods: methods},
-		{Name: "models/gemini-3.8-flash", SupportedGenerationMethods: methods},
-		{Name: "models/gemini-4-argon", SupportedGenerationMethods: methods},
+		{Name: "models/gemini-3.1-flash-image", SupportedGenerationMethods: chatMethods},
+		{Name: "models/gemini-3.1-flash-image-preview", SupportedGenerationMethods: chatMethods},
+		{Name: "models/gemini-3.1-flash-lite-image", SupportedGenerationMethods: chatMethods},
+		{Name: "models/gemini-3-pro-image", SupportedGenerationMethods: chatMethods},
+		{Name: "models/gemini-3-pro-image-preview", SupportedGenerationMethods: chatMethods},
+		{Name: "models/gemini-3-flash", SupportedGenerationMethods: chatMethods},
+		{Name: "models/gemini-3-flash-preview", SupportedGenerationMethods: chatMethods},
+		{Name: "models/gemini-3.1-pro-preview", SupportedGenerationMethods: chatMethods},
+		{Name: "models/gemini-3.1-pro-preview-customtools", SupportedGenerationMethods: chatMethods},
+		{Name: "models/gemini-3.1-flash-lite", SupportedGenerationMethods: chatMethods},
+		{Name: "models/gemini-3.1-flash-lite-preview", SupportedGenerationMethods: chatMethods},
+		{Name: "models/gemini-3.5-flash", SupportedGenerationMethods: chatMethods},
+		{Name: "models/gemini-3.5-flash-lite", SupportedGenerationMethods: chatMethods},
+		{Name: "models/gemini-3.6-flash", SupportedGenerationMethods: chatMethods},
+		{Name: "models/gemini-3.7-flash", SupportedGenerationMethods: chatMethods},
+		{Name: "models/gemini-3.8-flash", SupportedGenerationMethods: chatMethods},
+		{Name: "models/gemini-4-argon", SupportedGenerationMethods: chatMethods},
+		{Name: "models/gemini-embedding-001", SupportedGenerationMethods: embeddingMethods},
+		{Name: "models/text-embedding-004", SupportedGenerationMethods: embeddingMethods},
+		{Name: "models/embedding-001", SupportedGenerationMethods: embeddingMethods},
 	}
 }
 
@@ -59,7 +65,21 @@ func FallbackModelsList() ModelsListResponse {
 }
 
 func FallbackModel(model string) Model {
-	methods := []string{"generateContent", "streamGenerateContent"}
+	chatMethods := []string{"generateContent", "streamGenerateContent"}
+	embeddingMethods := []string{"embedContent", "batchEmbedContents"}
+
+	// Determine if model is for embedding based on name patterns
+	isEmbedding := false
+	if model != "" {
+		lower := strings.ToLower(model)
+		isEmbedding = strings.Contains(lower, "embedding") || strings.Contains(lower, "embed")
+	}
+
+	methods := chatMethods
+	if isEmbedding {
+		methods = embeddingMethods
+	}
+
 	if model == "" {
 		return Model{Name: "models/unknown", SupportedGenerationMethods: methods}
 	}

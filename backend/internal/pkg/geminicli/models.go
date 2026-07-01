@@ -28,6 +28,10 @@ var DefaultModels = []Model{
 	{ID: "gemini-3.7-flash", Type: "model", DisplayName: "Gemini 3.7 Flash", CreatedAt: ""},
 	{ID: "gemini-3.8-flash", Type: "model", DisplayName: "Gemini 3.8 Flash", CreatedAt: ""},
 	{ID: "gemini-4-argon", Type: "model", DisplayName: "Gemini 4 Argon", CreatedAt: ""},
+	// Embedding models
+	{ID: "gemini-embedding-001", Type: "model", DisplayName: "Gemini Embedding 001", CreatedAt: ""},
+	{ID: "text-embedding-004", Type: "model", DisplayName: "Text Embedding 004", CreatedAt: ""},
+	{ID: "embedding-001", Type: "model", DisplayName: "Embedding 001", CreatedAt: ""},
 }
 
 // GoogleOneModels is the conservative model set exposed for legacy Google One
