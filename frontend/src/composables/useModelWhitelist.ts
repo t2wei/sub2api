@@ -17,7 +17,9 @@ const openaiModels = [
   'gpt-5.3-codex-spark', 'codex-auto-review',
   'gpt-4o-audio-preview', 'gpt-4o-realtime-preview',
   // GPT Image 系列
-  'gpt-image-1', 'gpt-image-1.5', 'gpt-image-2'
+  'gpt-image-1', 'gpt-image-1.5', 'gpt-image-2',
+  // Embedding models
+  'text-embedding-3-small', 'text-embedding-3-large', 'text-embedding-ada-002'
 ]
 
 // Anthropic Claude
@@ -49,7 +51,11 @@ const geminiModels = [
   'gemini-2.5-pro',
   'gemini-3.5-flash',
   'gemini-3-flash-preview',
-  'gemini-3-pro-preview'
+  'gemini-3-pro-preview',
+  // Embedding models
+  'gemini-embedding-001',
+  'text-embedding-004',
+  'embedding-001'
 ]
 
 // Antigravity 官方支持的模型（精确匹配）
