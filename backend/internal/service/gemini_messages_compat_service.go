@@ -1179,15 +1179,20 @@ func (s *GeminiMessagesCompatService) ForwardNative(ctx context.Context, c *gin.
 	}
 
 	switch action {
-	case "generateContent", "streamGenerateContent", "countTokens":
+	case "generateContent", "streamGenerateContent", "countTokens",
+		"embedContent", "batchEmbedContents":
 		// ok
 	default:
 		return nil, s.writeGoogleError(c, http.StatusNotFound, "Unsupported action: "+action)
 	}
 
-	// Some Gemini upstreams validate tool call parts strictly; ensure any `functionCall` part includes a
-	// `thoughtSignature` to avoid frequent INVALID_ARGUMENT 400s.
-	body = ensureGeminiFunctionCallThoughtSignatures(body)
+	// Skip preprocessing for embedding requests
+	isEmbeddingAction := action == "embedContent" || action == "batchEmbedContents"
+	if !isEmbeddingAction {
+		// Some Gemini upstreams validate tool call parts strictly; ensure any `functionCall` part includes a
+		// `thoughtSignature` to avoid frequent INVALID_ARGUMENT 400s.
+		body = ensureGeminiFunctionCallThoughtSignatures(body)
+	}
 
 	mappedModel := originalModel
 	if account.Type == AccountTypeAPIKey || account.Type == AccountTypeServiceAccount {
@@ -1621,7 +1626,7 @@ func (s *GeminiMessagesCompatService) ForwardNative(ctx context.Context, c *gin.
 			c.Data(http.StatusOK, "application/json", b)
 			usage = usageObj
 		} else {
-			usageResp, err := s.handleNativeNonStreamingResponse(c, resp, isOAuth, account, requestID)
+			usageResp, err := s.handleNativeNonStreamingResponse(c, resp, isOAuth, account, requestID, action)
 			if err != nil {
 				return nil, err
 			}
@@ -2693,7 +2698,7 @@ type UpstreamHTTPResult struct {
 	Body       []byte
 }
 
-func (s *GeminiMessagesCompatService) handleNativeNonStreamingResponse(c *gin.Context, resp *http.Response, isOAuth bool, account *Account, upstreamRequestID string) (*ClaudeUsage, error) {
+func (s *GeminiMessagesCompatService) handleNativeNonStreamingResponse(c *gin.Context, resp *http.Response, isOAuth bool, account *Account, upstreamRequestID, action string) (*ClaudeUsage, error) {
 	if s.cfg != nil && s.cfg.Gateway.GeminiDebugResponseHeaders {
 		logger.LegacyPrintf("service.gemini_messages_compat", "[GeminiAPI] ========== Response Headers ==========")
 		for key, values := range resp.Header {
@@ -2735,8 +2740,16 @@ func (s *GeminiMessagesCompatService) handleNativeNonStreamingResponse(c *gin.Co
 	}
 	c.Data(resp.StatusCode, contentType, respBody)
 
-	if u := extractGeminiUsage(respBody); u != nil {
-		return u, nil
+	// Use appropriate usage extractor based on action type
+	isEmbeddingAction := action == "embedContent" || action == "batchEmbedContents"
+	if isEmbeddingAction {
+		if u := extractGeminiEmbeddingUsage(respBody); u != nil {
+			return u, nil
+		}
+	} else {
+		if u := extractGeminiUsage(respBody); u != nil {
+			return u, nil
+		}
 	}
 	return &ClaudeUsage{}, nil
 }
@@ -3058,6 +3071,23 @@ func extractGeminiUsage(data []byte) *ClaudeUsage {
 		OutputTokens:         cand + thoughts,
 		CacheReadInputTokens: cached,
 		ImageOutputTokens:    imageTokens,
+	}
+}
+
+func extractGeminiEmbeddingUsage(data []byte) *ClaudeUsage {
+	// Embedding 响应格式：
+	// {"embedding": {"values": [...]}, "usageMetadata": {"promptTokenCount": 10}}
+	// batchEmbedContents 响应格式：
+	// {"embeddings": [{"values": [...]}], "usageMetadata": {"promptTokenCount": 10}}
+	usage := gjson.GetBytes(data, "usageMetadata")
+	if !usage.Exists() {
+		return nil
+	}
+	prompt := int(usage.Get("promptTokenCount").Int())
+	// Embedding 请求只有 input tokens，无 output tokens
+	return &ClaudeUsage{
+		InputTokens:  prompt,
+		OutputTokens: 0,
 	}
 }
 

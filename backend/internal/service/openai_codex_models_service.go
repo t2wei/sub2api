@@ -47,7 +47,7 @@ const (
 	codexAutoModelPrefix              = "codex-auto-"
 )
 
-// FilterCodexModelIDsForGroup removes dedicated media-generation models,
+// FilterCodexModelIDsForGroup removes dedicated media-generation and embedding models,
 // wildcard mapping keys, and Codex automatic modes from a client catalog.
 // Automatic modes are retained only when the group's enabled model allowlist
 // explicitly selects the exact slug; account model mappings describe routing
@@ -72,7 +72,7 @@ func FilterCodexModelIDsForGroup(modelIDs []string, group *Group) []string {
 		if modelID == "" {
 			continue
 		}
-		if isCodexDedicatedMediaModel(modelID) {
+		if isCodexDedicatedMediaModel(modelID) || isCodexEmbeddingModel(modelID) {
 			continue
 		}
 		if strings.Contains(modelID, "*") {
@@ -96,6 +96,13 @@ func isCodexDedicatedMediaModel(modelID string) bool {
 	return IsGPTImageGenerationModel(canonical) ||
 		isImageGenerationModel(canonical) ||
 		xai.IsGrokImagineModel(modelID)
+}
+
+func isCodexEmbeddingModel(modelID string) bool {
+	canonical := strings.ToLower(codexProviderQualifiedModelID(modelID))
+	return strings.HasPrefix(canonical, "text-embedding-") ||
+		strings.HasPrefix(canonical, "gemini-embedding-") ||
+		canonical == "embedding-001"
 }
 
 func codexProviderQualifiedModelID(modelID string) string {
@@ -963,6 +970,9 @@ func buildCodexModelsManifest(
 			metadataModelID = modelID
 		}
 		if isCodexDedicatedMediaModel(modelID) || isCodexDedicatedMediaModel(metadataModelID) {
+			continue
+		}
+		if isCodexEmbeddingModel(modelID) || isCodexEmbeddingModel(metadataModelID) {
 			continue
 		}
 		seen[modelID] = struct{}{}
