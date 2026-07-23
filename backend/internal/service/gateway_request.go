@@ -204,6 +204,7 @@ func parseGatewayRequestCurrentBody(parsed *ParsedRequest, protocol string) erro
 				if err != nil {
 					return fmt.Errorf("normalize model field: %w", err)
 				}
+				parsed.ClaudeCodeLongContext1M = true
 				parsed.Body.Replace(normalizedBody)
 				bodyBytes = normalizedBody
 				jsonStr = *(*string)(unsafe.Pointer(&bodyBytes))
@@ -291,6 +292,9 @@ type ParsedRequest struct {
 	Speed           string          // Anthropic speed（当前可计费值为 "fast"）
 	MaxTokens       int             // max_tokens 值（用于探测请求拦截）
 	SessionContext  *SessionContext // 可选：请求上下文区分因子（nil 时行为不变）
+	// ClaudeCodeLongContext1M 表示请求模型带有 Claude Code 的 [1m] 客户端选择后缀。
+	// 该后缀会从 body.model 中剥离，但能力请求需要在后续上游构建阶段保留。
+	ClaudeCodeLongContext1M bool
 
 	protocol      string    // 当前 Body 的协议格式，用于 Body 替换后刷新 raw range
 	systemRange   jsonRange // system/systemInstruction.parts 的 raw JSON 范围，绑定 Body 当前内容

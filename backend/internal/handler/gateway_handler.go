@@ -58,6 +58,7 @@ type GatewayHandler struct {
 	maxAccountSwitchesGemini  int
 	cfg                       *config.Config
 	settingService            *service.SettingService
+	pricingService            *service.PricingService
 	lifecycleHook             RequestLifecycleHook // [OXSCI] 请求生命周期钩子（扩展点）
 }
 
@@ -1174,14 +1175,14 @@ func (h *GatewayHandler) Models(c *gin.Context) {
 			if len(source) == 0 {
 				source = defaultModelIDsForPlatform(service.PlatformComposite)
 			}
-			writeAllowlistedModelsList(c, service.PlatformComposite, apiKey.Group.ModelAllowlist.FilterForListing(source))
+			h.writeAllowlistedModelsList(c, service.PlatformComposite, apiKey.Group.ModelAllowlist.FilterForListing(source))
 			return
 		}
 		if len(availableModels) > 0 {
-			writeModelsList(c, service.PlatformComposite, availableModels)
+			h.writeModelsList(c, service.PlatformComposite, availableModels)
 			return
 		}
-		writeModelsList(c, service.PlatformComposite, defaultModelIDsForPlatform(service.PlatformComposite))
+		h.writeModelsList(c, service.PlatformComposite, defaultModelIDsForPlatform(service.PlatformComposite))
 		return
 	}
 
@@ -1189,12 +1190,12 @@ func (h *GatewayHandler) Models(c *gin.Context) {
 	availableModels := h.gatewayService.GetAvailableModels(c.Request.Context(), groupID, platform)
 	if apiKey != nil && apiKey.Group != nil && apiKey.Group.ModelAllowlistEnabled() {
 		source := modelListingSource(platform, availableModels, defaultModelIDsForPlatform(platform))
-		writeAllowlistedModelsList(c, platform, apiKey.Group.ModelAllowlist.FilterForListing(source))
+		h.writeAllowlistedModelsList(c, platform, apiKey.Group.ModelAllowlist.FilterForListing(source))
 		return
 	}
 
 	if len(availableModels) > 0 {
-		writeModelsList(c, platform, availableModels)
+		h.writeModelsList(c, platform, availableModels)
 		return
 	}
 
@@ -1213,7 +1214,9 @@ func (h *GatewayHandler) Models(c *gin.Context) {
 		return
 	}
 
-	writeModelsListResponse(c, claude.DefaultModels)
+	models := cloneClaudeModels(claude.DefaultModels)
+	h.enrichClaudeModels(models)
+	writeModelsListResponse(c, models)
 }
 
 // CodexModels returns the effective group model list using the manifest shape
@@ -1320,7 +1323,7 @@ func (h *GatewayHandler) compositeAvailableModels(ctx context.Context, groupID *
 	return models
 }
 
-func writeModelsList(c *gin.Context, platform string, modelIDs []string) {
+func (h *GatewayHandler) writeModelsList(c *gin.Context, platform string, modelIDs []string) {
 	if platform == service.PlatformOpenAI {
 		writeOpenAIModelsList(c, modelIDs)
 		return
@@ -1338,15 +1341,58 @@ func writeModelsList(c *gin.Context, platform string, modelIDs []string) {
 			CreatedAt:   "2024-01-01T00:00:00Z",
 		})
 	}
+	h.enrichClaudeModels(models)
 	writeModelsListResponse(c, models)
 }
 
-func writeAllowlistedModelsList(c *gin.Context, platform string, modelIDs []string) {
+func (h *GatewayHandler) writeAllowlistedModelsList(c *gin.Context, platform string, modelIDs []string) {
 	if platform == service.PlatformOpenAI {
 		writeOpenAIModelsList(c, modelIDs)
 		return
 	}
-	writeModelsList(c, platform, modelIDs)
+	h.writeModelsList(c, platform, modelIDs)
+}
+
+func cloneClaudeModels(models []claude.Model) []claude.Model {
+	out := make([]claude.Model, len(models))
+	copy(out, models)
+	return out
+}
+
+func (h *GatewayHandler) enrichClaudeModels(models []claude.Model) {
+	for i := range models {
+		if h != nil && h.pricingService != nil {
+			pricing := h.pricingService.GetModelPricing(models[i].ID)
+			if pricing != nil {
+				if pricing.MaxInputTokens > 0 {
+					models[i].MaxInputTokens = intPtr(pricing.MaxInputTokens)
+				}
+				if pricing.MaxOutputTokens > 0 {
+					models[i].MaxOutputTokens = intPtr(pricing.MaxOutputTokens)
+				}
+				if pricing.MaxTokens > 0 {
+					models[i].MaxTokens = intPtr(pricing.MaxTokens)
+				}
+			}
+		}
+		maxInput, maxOutput, maxTokens, ok := claude.KnownModelTokenLimits(models[i].ID)
+		if !ok {
+			continue
+		}
+		if models[i].MaxInputTokens == nil && maxInput > 0 {
+			models[i].MaxInputTokens = intPtr(maxInput)
+		}
+		if models[i].MaxOutputTokens == nil && maxOutput > 0 {
+			models[i].MaxOutputTokens = intPtr(maxOutput)
+		}
+		if models[i].MaxTokens == nil && maxTokens > 0 {
+			models[i].MaxTokens = intPtr(maxTokens)
+		}
+	}
+}
+
+func intPtr(v int) *int {
+	return &v
 }
 
 type grokReasoningEffortOption struct {

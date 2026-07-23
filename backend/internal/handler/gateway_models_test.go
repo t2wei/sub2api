@@ -5,9 +5,12 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/claude"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
 	middleware2 "github.com/Wei-Shaw/sub2api/internal/server/middleware"
@@ -52,6 +55,9 @@ type gatewayModelItemForTest struct {
 	SupportsReasoningEffort bool                                  `json:"supportsReasoningEffort"`
 	ReasoningEffort         string                                `json:"reasoningEffort"`
 	ReasoningEfforts        []gatewayReasoningEffortOptionForTest `json:"reasoningEfforts"`
+	MaxInputTokens          *int                                  `json:"max_input_tokens"`
+	MaxOutputTokens         *int                                  `json:"max_output_tokens"`
+	MaxTokens               *int                                  `json:"max_tokens"`
 }
 
 type gatewayReasoningEffortOptionForTest struct {
@@ -450,6 +456,21 @@ func codexReasoningEffortsForTest(levels []codexReasoningLevelForTest) []string 
 	return efforts
 }
 
+func newPricingServiceForGatewayModelsTest(t *testing.T, body string) *service.PricingService {
+	t.Helper()
+	dataDir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dataDir, "model_pricing.json"), []byte(body), 0644))
+	pricingSvc := service.NewPricingService(&config.Config{
+		Pricing: config.PricingConfig{
+			DataDir:             dataDir,
+			UpdateIntervalHours: 24,
+		},
+	}, nil)
+	require.NoError(t, pricingSvc.Initialize())
+	t.Cleanup(pricingSvc.Stop)
+	return pricingSvc
+}
+
 func TestGatewayModels_GeminiGroupFallsBackToGeminiModels(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
@@ -549,6 +570,176 @@ func assertGrokGatewayReasoningEfforts(t *testing.T, groupID int64, modelID stri
 	require.True(t, model.SupportsReasoningEffort)
 	require.Equal(t, "high", model.ReasoningEffort)
 	require.Equal(t, want, model.ReasoningEfforts)
+}
+
+func TestGatewayModels_AnthropicAdvertisesLiteLLMTokenLimits(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	groupID := int64(4410)
+	h := newGatewayModelsHandlerForTest(
+		&gatewayModelsAccountRepoStub{
+			byGroup: map[int64][]service.Account{
+				groupID: {
+					{
+						ID:       1,
+						Platform: service.PlatformAnthropic,
+						Credentials: map[string]any{
+							"model_mapping": map[string]any{
+								"claude-fable-5":    "claude-fable-5",
+								"claude-opus-4-8":   "claude-opus-4-8",
+								"claude-sonnet-4-6": "claude-sonnet-4-6",
+							},
+						},
+					},
+				},
+			},
+		},
+	)
+	h.pricingService = newPricingServiceForGatewayModelsTest(t, `{
+		"claude-opus-4-8": {
+			"input_cost_per_token": 0.000005,
+			"output_cost_per_token": 0.000025,
+			"litellm_provider": "anthropic",
+			"mode": "chat",
+			"max_input_tokens": 1000000,
+			"max_output_tokens": 128000,
+			"max_tokens": 128000
+		},
+		"claude-fable-5": {
+			"input_cost_per_token": 0.000005,
+			"output_cost_per_token": 0.000025,
+			"litellm_provider": "anthropic",
+			"mode": "chat"
+		}
+	}`)
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+	c.Set(string(middleware2.ContextKeyAPIKey), &service.APIKey{
+		Group: &service.Group{ID: groupID, Platform: service.PlatformAnthropic},
+	})
+
+	h.Models(c)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	var got gatewayModelsResponseForTest
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &got))
+	require.Len(t, got.Data, 3)
+	byID := gatewayModelsByIDForTest(got.Data)
+
+	opus := byID["claude-opus-4-8"]
+	require.NotNil(t, opus.MaxInputTokens)
+	require.Equal(t, 1000000, *opus.MaxInputTokens)
+	require.NotNil(t, opus.MaxOutputTokens)
+	require.Equal(t, 128000, *opus.MaxOutputTokens)
+	require.NotNil(t, opus.MaxTokens)
+	require.Equal(t, 128000, *opus.MaxTokens)
+
+	fable := byID["claude-fable-5"]
+	require.NotNil(t, fable.MaxInputTokens)
+	require.Equal(t, 1000000, *fable.MaxInputTokens)
+	require.NotNil(t, fable.MaxOutputTokens)
+	require.Equal(t, 128000, *fable.MaxOutputTokens)
+	require.NotNil(t, fable.MaxTokens)
+	require.Equal(t, 128000, *fable.MaxTokens)
+
+	sonnet := byID["claude-sonnet-4-6"]
+	require.Nil(t, sonnet.MaxInputTokens)
+	require.Nil(t, sonnet.MaxOutputTokens)
+	require.Nil(t, sonnet.MaxTokens)
+}
+
+func TestGatewayModels_AnthropicTokenLimitsPreservedForRetrievalAndAllowlist(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	pricing := newPricingServiceForGatewayModelsTest(t, `{
+		"claude-opus-4-8": {
+			"input_cost_per_token": 0.000005,
+			"output_cost_per_token": 0.000025,
+			"litellm_provider": "anthropic",
+			"mode": "chat",
+			"max_input_tokens": 900000,
+			"max_output_tokens": 64000,
+			"max_tokens": 64000
+		}
+	}`)
+
+	for _, tc := range []struct {
+		name        string
+		mapped      bool
+		allowlisted bool
+	}{
+		{name: "defaults"},
+		{name: "allowlisted defaults", allowlisted: true},
+		{name: "mapped", mapped: true},
+		{name: "allowlisted mapped", mapped: true, allowlisted: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			group := &service.Group{ID: 4412, Platform: service.PlatformAnthropic}
+			if tc.allowlisted {
+				group.ModelAllowlist = service.GroupModelAllowlist{
+					Enabled: true,
+					Models:  []string{"claude-opus-4-8", "claude-fable-5"},
+				}
+			}
+			account := service.Account{ID: 1, Platform: service.PlatformAnthropic}
+			if tc.mapped {
+				account.Credentials = map[string]any{"model_mapping": map[string]any{
+					"claude-opus-4-8":   "claude-opus-4-8",
+					"claude-fable-5":    "claude-fable-5",
+					"claude-sonnet-4-6": "claude-sonnet-4-6",
+				}}
+			}
+			h := newGatewayModelsHandlerForTest(&gatewayModelsAccountRepoStub{
+				byGroup: map[int64][]service.Account{group.ID: {account}},
+			})
+			h.pricingService = pricing
+			router := gin.New()
+			router.Use(func(c *gin.Context) {
+				c.Set(string(middleware2.ContextKeyAPIKey), &service.APIKey{GroupID: &group.ID, Group: group})
+				c.Next()
+			})
+			router.GET("/v1/models", h.Models)
+			router.GET("/v1/models/:model", h.Models)
+			request := func(path string) *httptest.ResponseRecorder {
+				rec := httptest.NewRecorder()
+				router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+				return rec
+			}
+
+			list := request("/v1/models")
+			require.Equal(t, http.StatusOK, list.Code, list.Body.String())
+			var catalog gatewayModelsResponseForTest
+			require.NoError(t, json.Unmarshal(list.Body.Bytes(), &catalog))
+			if tc.allowlisted {
+				require.Equal(t, group.ModelAllowlist.Models, modelIDsForTest(catalog.Data))
+				hidden := request("/v1/models/claude-sonnet-4-6")
+				require.Equal(t, http.StatusNotFound, hidden.Code, hidden.Body.String())
+			}
+			byID := gatewayModelsByIDForTest(catalog.Data)
+			for _, expected := range []struct {
+				id        string
+				maxInput  int
+				maxOutput int
+			}{
+				{id: "claude-opus-4-8", maxInput: 900000, maxOutput: 64000},
+				{id: "claude-fable-5", maxInput: 1000000, maxOutput: 128000},
+			} {
+				retrieved := request("/v1/models/" + expected.id)
+				require.Equal(t, http.StatusOK, retrieved.Code, retrieved.Body.String())
+				var model gatewayModelItemForTest
+				require.NoError(t, json.Unmarshal(retrieved.Body.Bytes(), &model))
+				require.Equal(t, expected.id, model.ID)
+				require.Equal(t, byID[expected.id], model)
+				require.NotNil(t, model.MaxInputTokens)
+				require.Equal(t, expected.maxInput, *model.MaxInputTokens)
+				require.NotNil(t, model.MaxOutputTokens)
+				require.Equal(t, expected.maxOutput, *model.MaxOutputTokens)
+				require.NotNil(t, model.MaxTokens)
+				require.Equal(t, expected.maxOutput, *model.MaxTokens)
+			}
+		})
+	}
 }
 
 func TestGatewayModels_GeminiGroupFiltersMappedModelsByPlatform(t *testing.T) {
@@ -1521,4 +1712,12 @@ func TestGatewayModels_GPT6SolLunaDiscoveryRespectsGroupAndAccountRestrictions(t
 			require.Equal(t, tc.want, modelIDsForTest(got.Data))
 		})
 	}
+}
+
+func gatewayModelsByIDForTest(models []gatewayModelItemForTest) map[string]gatewayModelItemForTest {
+	byID := make(map[string]gatewayModelItemForTest, len(models))
+	for _, model := range models {
+		byID[model.ID] = model
+	}
+	return byID
 }

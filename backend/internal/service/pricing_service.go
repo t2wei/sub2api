@@ -198,6 +198,9 @@ type LiteLLMModelPricing struct {
 	LongContextInputTokenThreshold      int     `json:"long_context_input_token_threshold,omitempty"`
 	LongContextInputCostMultiplier      float64 `json:"long_context_input_cost_multiplier,omitempty"`
 	LongContextOutputCostMultiplier     float64 `json:"long_context_output_cost_multiplier,omitempty"`
+	MaxInputTokens                      int     `json:"max_input_tokens,omitempty"`
+	MaxOutputTokens                     int     `json:"max_output_tokens,omitempty"`
+	MaxTokens                           int     `json:"max_tokens,omitempty"`
 	SupportsServiceTier                 bool    `json:"supports_service_tier"`
 	LiteLLMProvider                     string  `json:"litellm_provider"`
 	Mode                                string  `json:"mode"`
@@ -233,6 +236,9 @@ type LiteLLMRawEntry struct {
 	LongContextInputTokenThreshold      *int     `json:"long_context_input_token_threshold"`
 	LongContextInputCostMultiplier      *float64 `json:"long_context_input_cost_multiplier"`
 	LongContextOutputCostMultiplier     *float64 `json:"long_context_output_cost_multiplier"`
+	MaxInputTokens                      *int     `json:"max_input_tokens"`
+	MaxOutputTokens                     *int     `json:"max_output_tokens"`
+	MaxTokens                           *int     `json:"max_tokens"`
 	SupportsServiceTier                 bool     `json:"supports_service_tier"`
 	LiteLLMProvider                     string   `json:"litellm_provider"`
 	Mode                                string   `json:"mode"`
@@ -701,6 +707,15 @@ func (s *PricingService) parsePricingData(body []byte) (map[string]*LiteLLMModel
 		if entry.LongContextOutputCostMultiplier != nil {
 			pricing.LongContextOutputCostMultiplier = *entry.LongContextOutputCostMultiplier
 		}
+		if entry.MaxInputTokens != nil {
+			pricing.MaxInputTokens = *entry.MaxInputTokens
+		}
+		if entry.MaxOutputTokens != nil {
+			pricing.MaxOutputTokens = *entry.MaxOutputTokens
+		}
+		if entry.MaxTokens != nil {
+			pricing.MaxTokens = *entry.MaxTokens
+		}
 		if entry.OutputCostPerImage != nil {
 			pricing.OutputCostPerImage = *entry.OutputCostPerImage
 		}
@@ -1075,7 +1090,8 @@ func (s *PricingService) mergeFallbackPricingData(data map[string]*LiteLLMModelP
 	}
 	merged := 0
 	for modelName, pricing := range fallbackData {
-		if _, ok := data[modelName]; ok {
+		if existing, ok := data[modelName]; ok {
+			fillMissingPricingCapabilities(existing, pricing)
 			continue
 		}
 		data[modelName] = pricing
@@ -1113,6 +1129,21 @@ func warnDroppedLongContextLadders(old, next map[string]*LiteLLMModelPricing) {
 		dropped = append(dropped[:20], "...")
 	}
 	logger.LegacyPrintf("service.pricing", "[Pricing] Long-context ladder dropped for %d model(s) after reload: %s (verify catalog/override data if unintended)", total, strings.Join(dropped, ", "))
+}
+
+func fillMissingPricingCapabilities(existing, fallback *LiteLLMModelPricing) {
+	if existing == nil || fallback == nil {
+		return
+	}
+	if existing.MaxInputTokens == 0 && fallback.MaxInputTokens > 0 {
+		existing.MaxInputTokens = fallback.MaxInputTokens
+	}
+	if existing.MaxOutputTokens == 0 && fallback.MaxOutputTokens > 0 {
+		existing.MaxOutputTokens = fallback.MaxOutputTokens
+	}
+	if existing.MaxTokens == 0 && fallback.MaxTokens > 0 {
+		existing.MaxTokens = fallback.MaxTokens
+	}
 }
 
 // useFallbackPricing 使用回退价格文件
