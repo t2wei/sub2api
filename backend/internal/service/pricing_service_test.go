@@ -56,6 +56,9 @@ func TestParsePricingData_ParsesPriorityAndServiceTierFields(t *testing.T) {
 			"long_context_input_token_threshold": 272000,
 			"long_context_input_cost_multiplier": 2,
 			"long_context_output_cost_multiplier": 1.5,
+			"max_input_tokens": 1000000,
+			"max_output_tokens": 128000,
+			"max_tokens": 128000,
 			"supports_service_tier": true,
 			"supports_prompt_caching": true,
 			"litellm_provider": "openai",
@@ -74,6 +77,9 @@ func TestParsePricingData_ParsesPriorityAndServiceTierFields(t *testing.T) {
 	require.Equal(t, 272000, pricing.LongContextInputTokenThreshold)
 	require.InDelta(t, 2.0, pricing.LongContextInputCostMultiplier, 1e-12)
 	require.InDelta(t, 1.5, pricing.LongContextOutputCostMultiplier, 1e-12)
+	require.Equal(t, 1000000, pricing.MaxInputTokens)
+	require.Equal(t, 128000, pricing.MaxOutputTokens)
+	require.Equal(t, 128000, pricing.MaxTokens)
 	require.True(t, pricing.SupportsServiceTier)
 }
 
@@ -351,6 +357,9 @@ func TestPricingService_MergesFallbackOnlyModels(t *testing.T) {
 	require.NoError(t, os.WriteFile(fallbackFile, []byte(`{
 		"remote-model": {
 			"input_cost_per_token": 0.000001,
+			"max_input_tokens": 1000000,
+			"max_output_tokens": 128000,
+			"max_tokens": 128000,
 			"litellm_provider": "test",
 			"mode": "chat"
 		},
@@ -374,6 +383,9 @@ func TestPricingService_MergesFallbackOnlyModels(t *testing.T) {
 
 	merged := svc.mergeFallbackPricingData(remoteData)
 	require.InDelta(t, 0.000002, merged["remote-model"].InputCostPerToken, 1e-12)
+	require.Equal(t, 1000000, merged["remote-model"].MaxInputTokens)
+	require.Equal(t, 128000, merged["remote-model"].MaxOutputTokens)
+	require.Equal(t, 128000, merged["remote-model"].MaxTokens)
 	require.NotNil(t, merged["gemini-3.1-flash-lite-image"])
 	require.InDelta(t, 0.034, merged["gemini-3.1-flash-lite-image"].OutputCostPerImage, 1e-12)
 }

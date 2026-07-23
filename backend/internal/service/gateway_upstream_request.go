@@ -101,8 +101,9 @@ func (s *GatewayService) buildUpstreamRequest(ctx context.Context, c *gin.Contex
 	//   5) 透传白名单 / fingerprint / mimic header / 写入 finalBeta
 	policyFilterSet := s.getBetaPolicyFilterSet(ctx, c, account, modelID)
 	effectiveDropSet := mergeDropSets(policyFilterSet)
+	extraRequiredBetas := anthropicContext1MRequiredBetas(ctx)
 	finalBetaHeader, finalBetaShouldSet := s.computeFinalAnthropicBeta(
-		tokenType, mimicClaudeCode, modelID, clientHeaders, body, effectiveDropSet,
+		tokenType, mimicClaudeCode, modelID, clientHeaders, body, effectiveDropSet, extraRequiredBetas...,
 	)
 
 	// 账号覆写了 anthropic-beta 时，覆写值即最终上游值（由下方 ApplyHeaderOverrides 写入）：
@@ -277,6 +278,7 @@ func (s *GatewayService) buildUpstreamRequestAnthropicVertex(
 	if c != nil && c.Request != nil {
 		clientBeta = getHeaderRaw(c.Request.Header, "anthropic-beta")
 	}
+	clientBeta = mergeAnthropicContext1MIntoBeta(ctx, clientBeta, account)
 	policy := s.evaluateBetaPolicy(ctx, clientBeta, account, modelID)
 	if policy.blockErr != nil {
 		return nil, policy.blockErr
@@ -488,6 +490,7 @@ func (s *GatewayService) computeFinalAnthropicBeta(
 	clientHeaders http.Header,
 	body []byte,
 	effectiveDropSet map[string]struct{},
+	extraRequiredBetas ...string,
 ) (string, bool) {
 	clientBeta := ""
 	if clientHeaders != nil {
@@ -498,20 +501,25 @@ func (s *GatewayService) computeFinalAnthropicBeta(
 		if mimicClaudeCode {
 			// mimic 路径跳过白名单透传，incomingBeta 始终为空；所有模型都必须
 			// 携带完整 Claude Code beta 集合，避免 Haiku 被识别为第三方客户端。
-			return mergeAnthropicBetaDropping(claude.FullClaudeCodeMimicryBetas(), "", effectiveDropSet), true
+			requiredBetas := append(claude.FullClaudeCodeMimicryBetas(), extraRequiredBetas...)
+			return mergeAnthropicBetaDropping(requiredBetas, "", effectiveDropSet), true
 		}
 		// 真 Claude Code 客户端透传路径
-		return stripBetaTokensWithSet(s.getBetaHeader(modelID, clientBeta), effectiveDropSet), true
+		return mergeAnthropicBetaDropping(extraRequiredBetas, s.getBetaHeader(modelID, clientBeta), effectiveDropSet), true
 	}
 
 	// API-key accounts
 	if clientBeta != "" {
-		return stripBetaTokensWithSet(clientBeta, effectiveDropSet), true
+		return mergeAnthropicBetaDropping(extraRequiredBetas, clientBeta, effectiveDropSet), true
+	}
+	if len(extraRequiredBetas) > 0 {
+		merged := mergeAnthropicBetaDropping(extraRequiredBetas, "", effectiveDropSet)
+		return merged, merged != ""
 	}
 	if s.cfg != nil && s.cfg.Gateway.InjectBetaForAPIKey {
 		if requestNeedsBetaFeatures(body) {
 			if beta := defaultAPIKeyBetaHeader(body); beta != "" {
-				return beta, true
+				return mergeAnthropicBetaDropping(extraRequiredBetas, beta, effectiveDropSet), true
 			}
 		}
 	}
@@ -535,6 +543,7 @@ func (s *GatewayService) computeFinalCountTokensAnthropicBeta(
 	clientHeaders http.Header,
 	body []byte,
 	effectiveDropSet map[string]struct{},
+	extraRequiredBetas ...string,
 ) (string, bool) {
 	clientBeta := ""
 	if clientHeaders != nil {
@@ -548,26 +557,31 @@ func (s *GatewayService) computeFinalCountTokensAnthropicBeta(
 			// incomingBeta = req.Header[anthropic-beta] = 客户端透传过来的 client beta。
 			// 重构后直接从 clientHeaders 拿同一个值，保持行为一致。
 			requiredBetas := append(claude.FullClaudeCodeMimicryBetas(), claude.BetaTokenCounting)
+			requiredBetas = append(requiredBetas, extraRequiredBetas...)
 			return mergeAnthropicBetaDropping(requiredBetas, clientBeta, effectiveDropSet), true
 		}
 		if clientBeta == "" {
-			return claude.CountTokensBetaHeader, true
+			return mergeAnthropicBetaDropping(extraRequiredBetas, claude.CountTokensBetaHeader, effectiveDropSet), true
 		}
 		beta := s.getBetaHeader(modelID, clientBeta)
 		if !strings.Contains(beta, claude.BetaTokenCounting) {
 			beta = beta + "," + claude.BetaTokenCounting
 		}
-		return stripBetaTokensWithSet(beta, effectiveDropSet), true
+		return mergeAnthropicBetaDropping(extraRequiredBetas, beta, effectiveDropSet), true
 	}
 
 	// API-key accounts
 	if clientBeta != "" {
-		return stripBetaTokensWithSet(clientBeta, effectiveDropSet), true
+		return mergeAnthropicBetaDropping(extraRequiredBetas, clientBeta, effectiveDropSet), true
+	}
+	if len(extraRequiredBetas) > 0 {
+		merged := mergeAnthropicBetaDropping(extraRequiredBetas, "", effectiveDropSet)
+		return merged, merged != ""
 	}
 	if s.cfg != nil && s.cfg.Gateway.InjectBetaForAPIKey {
 		if requestNeedsBetaFeatures(body) {
 			if beta := defaultAPIKeyBetaHeader(body); beta != "" {
-				return beta, true
+				return mergeAnthropicBetaDropping(extraRequiredBetas, beta, effectiveDropSet), true
 			}
 		}
 	}

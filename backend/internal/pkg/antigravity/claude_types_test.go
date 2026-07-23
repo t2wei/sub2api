@@ -32,4 +32,12 @@ func TestDefaultModels_ContainsNewAndLegacyImageModels(t *testing.T) {
 			t.Fatalf("expected model %q to be exposed in DefaultModels", id)
 		}
 	}
+
+	fable := byID["claude-fable-5"]
+	if fable.MaxInputTokens == nil || *fable.MaxInputTokens != 1000000 {
+		t.Fatalf("expected claude-fable-5 max_input_tokens=1000000, got %v", fable.MaxInputTokens)
+	}
+	if fable.MaxOutputTokens == nil || *fable.MaxOutputTokens != 128000 {
+		t.Fatalf("expected claude-fable-5 max_output_tokens=128000, got %v", fable.MaxOutputTokens)
+	}
 }

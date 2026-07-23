@@ -477,6 +477,29 @@ func TestBuildUpstreamRequest_OAuthMimicHaiku_PreservesContextManagementEndToEnd
 		"Haiku mimic 必须携带 claude-code beta")
 }
 
+func TestBuildUpstreamRequest_Context1MRequestedInjectsBeta(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+
+	account := &Account{ID: 421, Platform: PlatformAnthropic, Type: AccountTypeOAuth,
+		Credentials: map[string]any{"access_token": "oauth-tok"},
+		Status:      StatusActive, Schedulable: true,
+	}
+	body := []byte(`{"model":"claude-opus-4-8","messages":[]}`)
+	svc := &GatewayService{cfg: &config.Config{}}
+	req, _, err := svc.buildUpstreamRequest(
+		WithAnthropicContext1M(context.Background()), c, account, body,
+		"oauth-tok", "oauth", "claude-opus-4-8", false, true,
+	)
+	require.NoError(t, err)
+
+	outBeta := getHeaderRaw(req.Header, "anthropic-beta")
+	require.True(t, anthropicBetaTokensContains(outBeta, claude.BetaContext1M),
+		"[1m] model selector must become context-1m beta on the upstream request")
+}
+
 func TestBuildUpstreamRequest_APIKeyHaiku_RemainsUnmimicked(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	rec := httptest.NewRecorder()
@@ -623,6 +646,31 @@ func TestBuildCountTokensRequest_OAuthMimic_DropsInjectedMaxTokens(t *testing.T)
 	require.NoError(t, err)
 	require.False(t, gjson.GetBytes(readUpstreamBodyForTest(t, req), "max_tokens").Exists(),
 		"count_tokens wire body must not contain max_tokens")
+}
+
+func TestBuildCountTokensRequest_Context1MRequestedInjectsBeta(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages/count_tokens", nil)
+
+	account := &Account{ID: 422, Platform: PlatformAnthropic, Type: AccountTypeOAuth,
+		Credentials: map[string]any{"access_token": "oauth-tok"},
+		Status:      StatusActive, Schedulable: true,
+	}
+	body := []byte(`{"model":"claude-opus-4-8","messages":[]}`)
+	svc := &GatewayService{cfg: &config.Config{}}
+	req, _, err := svc.buildCountTokensRequest(
+		WithAnthropicContext1M(context.Background()), c, account, body,
+		"oauth-tok", "oauth", "claude-opus-4-8", true,
+	)
+	require.NoError(t, err)
+
+	outBeta := getHeaderRaw(req.Header, "anthropic-beta")
+	require.True(t, anthropicBetaTokensContains(outBeta, claude.BetaContext1M),
+		"count_tokens must preserve [1m] context selector as context-1m beta")
+	require.True(t, anthropicBetaTokensContains(outBeta, claude.BetaTokenCounting),
+		"count_tokens still needs token-counting beta")
 }
 
 func TestBuildCountTokensRequest_APIKeyHaiku_StripsContextManagementEndToEnd(t *testing.T) {

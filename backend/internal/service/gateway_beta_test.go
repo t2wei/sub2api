@@ -243,10 +243,10 @@ func TestIsCountTokensUnsupported404(t *testing.T) {
 	}
 }
 
-// TestDefaultBetaPolicy_Context1M_Sonnet5Whitelist 验证默认策略下 context-1m-2025-08-07 的分模型行为：
-//   - claude-sonnet-5 及后续版本：pass（放行），保留 1M 上下文能力
-//   - 其他 sonnet 版本（4.x 及以下）、opus、haiku：filter（过滤），因为上游不支持
-func TestDefaultBetaPolicy_Context1M_Sonnet5Whitelist(t *testing.T) {
+// TestDefaultBetaPolicy_Context1M_ModelWhitelist 验证默认策略下 context-1m-2025-08-07 的分模型行为：
+//   - claude-sonnet-5 及后续版本、claude-opus-4-8：pass（放行），保留 1M 上下文能力
+//   - 其他 sonnet 版本（4.x 及以下）、旧 opus、haiku：filter（过滤），因为上游不支持
+func TestDefaultBetaPolicy_Context1M_ModelWhitelist(t *testing.T) {
 	settings := DefaultBetaPolicySettings()
 
 	// 找到 context-1m-2025-08-07 规则
@@ -274,8 +274,11 @@ func TestDefaultBetaPolicy_Context1M_Sonnet5Whitelist(t *testing.T) {
 		{"claude-sonnet-5", BetaPolicyActionPass, "sonnet-5 canonical"},
 		{"claude-sonnet-5-20260701", BetaPolicyActionPass, "sonnet-5 dated variant matches wildcard"},
 		{"claude-sonnet-5-thinking", BetaPolicyActionPass, "sonnet-5 thinking variant matches wildcard"},
+		{"claude-opus-4-8", BetaPolicyActionPass, "opus 4.8 canonical"},
+		{"claude-opus-4-8-thinking", BetaPolicyActionPass, "opus 4.8 suffix variant matches wildcard"},
 		// —— Vertex AI 归一化后的 sonnet-5 —— 也应放行
 		{"claude-sonnet-5@20260701", BetaPolicyActionPass, "sonnet-5 Vertex-normalized dated form"},
+		{"claude-opus-4-8@20260529", BetaPolicyActionPass, "opus 4.8 Vertex-normalized dated form"},
 		// —— AWS Bedrock 各跨区域前缀 sonnet-5 —— 也应放行
 		{"us.anthropic.claude-sonnet-5-v1", BetaPolicyActionPass, "bedrock us. sonnet-5"},
 		{"eu.anthropic.claude-sonnet-5-20260701-v1:0", BetaPolicyActionPass, "bedrock eu. sonnet-5 dated"},
@@ -285,6 +288,9 @@ func TestDefaultBetaPolicy_Context1M_Sonnet5Whitelist(t *testing.T) {
 		{"us-gov.anthropic.claude-sonnet-5-v1", BetaPolicyActionPass, "bedrock us-gov. sonnet-5"},
 		{"global.anthropic.claude-sonnet-5-v1", BetaPolicyActionPass, "bedrock global. sonnet-5"},
 		{"anthropic.claude-sonnet-5-v1", BetaPolicyActionPass, "bedrock no-region sonnet-5"},
+		{"us.anthropic.claude-opus-4-8-v1", BetaPolicyActionPass, "bedrock us. opus 4.8"},
+		{"global.anthropic.claude-opus-4-8-v1", BetaPolicyActionPass, "bedrock global opus 4.8"},
+		{"anthropic.claude-opus-4-8-v1", BetaPolicyActionPass, "bedrock no-region opus 4.8"},
 
 		// —— sonnet-4.x 及以下必须过滤 ——
 		{"claude-sonnet-4-6", BetaPolicyActionFilter, "sonnet-4.6 must be filtered"},
@@ -293,10 +299,9 @@ func TestDefaultBetaPolicy_Context1M_Sonnet5Whitelist(t *testing.T) {
 		{"claude-sonnet-4-5@20250929", BetaPolicyActionFilter, "sonnet-4.5 Vertex format must be filtered"},
 		{"us.anthropic.claude-sonnet-4-6", BetaPolicyActionFilter, "bedrock us. sonnet-4.6 must be filtered"},
 		{"us.anthropic.claude-sonnet-4-5-20250929-v1:0", BetaPolicyActionFilter, "bedrock us. sonnet-4.5 must be filtered"},
-		// —— Opus / Haiku 必须过滤（无 1M） ——
-		{"claude-opus-4-8", BetaPolicyActionFilter, "opus must be filtered"},
+		// —— 旧 Opus / Haiku 必须过滤（无 1M） ——
 		{"claude-opus-4-7", BetaPolicyActionFilter, "opus 4.7 must be filtered"},
-		{"us.anthropic.claude-opus-4-8-v1", BetaPolicyActionFilter, "bedrock opus 4.8 must be filtered"},
+		{"us.anthropic.claude-opus-4-7-v1", BetaPolicyActionFilter, "bedrock opus 4.7 must be filtered"},
 		{"claude-haiku-4-5", BetaPolicyActionFilter, "haiku must be filtered"},
 		{"us.anthropic.claude-haiku-4-5-20251001-v1:0", BetaPolicyActionFilter, "bedrock haiku must be filtered"},
 		{"claude-3-5-sonnet-20241022", BetaPolicyActionFilter, "legacy sonnet 3.5 must be filtered"},

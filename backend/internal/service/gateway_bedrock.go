@@ -77,6 +77,7 @@ func (s *GatewayService) forwardBedrock(
 	if c != nil && c.Request != nil {
 		betaHeader = c.GetHeader("anthropic-beta")
 	}
+	betaHeader = mergeAnthropicContext1MIntoBeta(ctx, betaHeader, account)
 
 	// 准备请求体（注入 anthropic_version/anthropic_beta，移除 Bedrock 不支持的字段，清理 cache_control）
 	betaTokens, err := s.resolveBedrockBetaTokensForRequest(ctx, account, betaHeader, body, mappedModel)

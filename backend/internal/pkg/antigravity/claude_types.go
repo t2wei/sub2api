@@ -3,6 +3,8 @@ package antigravity
 import (
 	"encoding/json"
 	"strings"
+
+	"github.com/Wei-Shaw/sub2api/internal/pkg/claude"
 )
 
 // Claude 请求/响应类型定义
@@ -191,10 +193,13 @@ var geminiModels = []modelDef{
 
 // ClaudeModel Claude API 模型格式
 type ClaudeModel struct {
-	ID          string `json:"id"`
-	Type        string `json:"type"`
-	DisplayName string `json:"display_name"`
-	CreatedAt   string `json:"created_at"`
+	ID              string `json:"id"`
+	Type            string `json:"type"`
+	DisplayName     string `json:"display_name"`
+	CreatedAt       string `json:"created_at"`
+	MaxInputTokens  *int   `json:"max_input_tokens,omitempty"`
+	MaxOutputTokens *int   `json:"max_output_tokens,omitempty"`
+	MaxTokens       *int   `json:"max_tokens,omitempty"`
 }
 
 // DefaultModels 返回 Claude API 格式的模型列表（Claude + Gemini）
@@ -203,8 +208,17 @@ func DefaultModels() []ClaudeModel {
 	result := make([]ClaudeModel, len(all))
 	for i, m := range all {
 		result[i] = ClaudeModel{ID: m.ID, Type: "model", DisplayName: m.DisplayName, CreatedAt: m.CreatedAt}
+		if maxInput, maxOutput, maxTokens, ok := claude.KnownModelTokenLimits(m.ID); ok {
+			result[i].MaxInputTokens = intPtr(maxInput)
+			result[i].MaxOutputTokens = intPtr(maxOutput)
+			result[i].MaxTokens = intPtr(maxTokens)
+		}
 	}
 	return result
+}
+
+func intPtr(v int) *int {
+	return &v
 }
 
 // ========== Gemini v1beta 格式 (/v1beta/models) ==========

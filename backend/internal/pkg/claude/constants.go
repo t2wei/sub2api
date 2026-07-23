@@ -109,10 +109,33 @@ var DefaultHeaders = map[string]string{
 
 // Model 表示一个 Claude 模型
 type Model struct {
-	ID          string `json:"id"`
-	Type        string `json:"type"`
-	DisplayName string `json:"display_name"`
-	CreatedAt   string `json:"created_at"`
+	ID              string `json:"id"`
+	Type            string `json:"type"`
+	DisplayName     string `json:"display_name"`
+	CreatedAt       string `json:"created_at"`
+	MaxInputTokens  *int   `json:"max_input_tokens,omitempty"`
+	MaxOutputTokens *int   `json:"max_output_tokens,omitempty"`
+	MaxTokens       *int   `json:"max_tokens,omitempty"`
+}
+
+const (
+	KnownLongContextMaxInputTokens  = 1000000
+	KnownLongContextMaxOutputTokens = 128000
+)
+
+// KnownModelTokenLimits returns curated token limits for Claude models whose
+// public capability is ahead of, or not consistently present in, LiteLLM data.
+func KnownModelTokenLimits(modelID string) (maxInputTokens, maxOutputTokens, maxTokens int, ok bool) {
+	switch modelID {
+	case "claude-fable-5",
+		"claude-opus-4-7",
+		"claude-opus-4-8",
+		"claude-opus-5",
+		"claude-sonnet-5":
+		return KnownLongContextMaxInputTokens, KnownLongContextMaxOutputTokens, KnownLongContextMaxOutputTokens, true
+	default:
+		return 0, 0, 0, false
+	}
 }
 
 // DefaultModels Claude Code 客户端支持的默认模型列表

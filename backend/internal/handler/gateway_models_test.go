@@ -5,8 +5,11 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"testing"
 
+	"github.com/Wei-Shaw/sub2api/internal/config"
 	middleware2 "github.com/Wei-Shaw/sub2api/internal/server/middleware"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/gin-gonic/gin"
@@ -33,6 +36,9 @@ type gatewayModelItemForTest struct {
 	SupportsReasoningEffort bool                                  `json:"supportsReasoningEffort"`
 	ReasoningEffort         string                                `json:"reasoningEffort"`
 	ReasoningEfforts        []gatewayReasoningEffortOptionForTest `json:"reasoningEfforts"`
+	MaxInputTokens          *int                                  `json:"max_input_tokens"`
+	MaxOutputTokens         *int                                  `json:"max_output_tokens"`
+	MaxTokens               *int                                  `json:"max_tokens"`
 }
 
 type gatewayReasoningEffortOptionForTest struct {
@@ -67,6 +73,21 @@ func TestDefaultModelIDsForCompositeIncludesAntigravityDefaults(t *testing.T) {
 
 	compositeIDs := defaultModelIDsForPlatform(service.PlatformComposite)
 	require.Contains(t, compositeIDs, antigravityIDs[0])
+}
+
+func newPricingServiceForGatewayModelsTest(t *testing.T, body string) *service.PricingService {
+	t.Helper()
+	dataDir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dataDir, "model_pricing.json"), []byte(body), 0644))
+	pricingSvc := service.NewPricingService(&config.Config{
+		Pricing: config.PricingConfig{
+			DataDir:             dataDir,
+			UpdateIntervalHours: 24,
+		},
+	}, nil)
+	require.NoError(t, pricingSvc.Initialize())
+	t.Cleanup(pricingSvc.Stop)
+	return pricingSvc
 }
 
 func TestGatewayModels_GeminiGroupFallsBackToGeminiModels(t *testing.T) {
@@ -143,6 +164,84 @@ func TestGatewayModels_Grok45AdvertisesReasoningEffortForGrokBuild(t *testing.T)
 		{Value: "medium", Label: "Medium"},
 		{Value: "high", Label: "High", Default: true},
 	}, model.ReasoningEfforts)
+}
+
+func TestGatewayModels_AnthropicAdvertisesLiteLLMTokenLimits(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	groupID := int64(4410)
+	h := newGatewayModelsHandlerForTest(
+		&gatewayModelsAccountRepoStub{
+			byGroup: map[int64][]service.Account{
+				groupID: {
+					{
+						ID:       1,
+						Platform: service.PlatformAnthropic,
+						Credentials: map[string]any{
+							"model_mapping": map[string]any{
+								"claude-fable-5":    "claude-fable-5",
+								"claude-opus-4-8":   "claude-opus-4-8",
+								"claude-sonnet-4-6": "claude-sonnet-4-6",
+							},
+						},
+					},
+				},
+			},
+		},
+	)
+	h.pricingService = newPricingServiceForGatewayModelsTest(t, `{
+		"claude-opus-4-8": {
+			"input_cost_per_token": 0.000005,
+			"output_cost_per_token": 0.000025,
+			"litellm_provider": "anthropic",
+			"mode": "chat",
+			"max_input_tokens": 1000000,
+			"max_output_tokens": 128000,
+			"max_tokens": 128000
+		},
+		"claude-fable-5": {
+			"input_cost_per_token": 0.000005,
+			"output_cost_per_token": 0.000025,
+			"litellm_provider": "anthropic",
+			"mode": "chat"
+		}
+	}`)
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+	c.Set(string(middleware2.ContextKeyAPIKey), &service.APIKey{
+		Group: &service.Group{ID: groupID, Platform: service.PlatformAnthropic},
+	})
+
+	h.Models(c)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	var got gatewayModelsResponseForTest
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &got))
+	require.Len(t, got.Data, 3)
+	byID := gatewayModelsByIDForTest(got.Data)
+
+	opus := byID["claude-opus-4-8"]
+	require.NotNil(t, opus.MaxInputTokens)
+	require.Equal(t, 1000000, *opus.MaxInputTokens)
+	require.NotNil(t, opus.MaxOutputTokens)
+	require.Equal(t, 128000, *opus.MaxOutputTokens)
+	require.NotNil(t, opus.MaxTokens)
+	require.Equal(t, 128000, *opus.MaxTokens)
+
+	fable := byID["claude-fable-5"]
+	require.NotNil(t, fable.MaxInputTokens)
+	require.Equal(t, 1000000, *fable.MaxInputTokens)
+	require.NotNil(t, fable.MaxOutputTokens)
+	require.Equal(t, 128000, *fable.MaxOutputTokens)
+	require.NotNil(t, fable.MaxTokens)
+	require.Equal(t, 128000, *fable.MaxTokens)
+
+	sonnet := byID["claude-sonnet-4-6"]
+	require.Nil(t, sonnet.MaxInputTokens)
+	require.Nil(t, sonnet.MaxOutputTokens)
+	require.Nil(t, sonnet.MaxTokens)
 }
 
 func TestGatewayModels_GeminiGroupFiltersMappedModelsByPlatform(t *testing.T) {
@@ -702,4 +801,12 @@ func modelIDsForTest(models []gatewayModelItemForTest) []string {
 		ids = append(ids, model.ID)
 	}
 	return ids
+}
+
+func gatewayModelsByIDForTest(models []gatewayModelItemForTest) map[string]gatewayModelItemForTest {
+	byID := make(map[string]gatewayModelItemForTest, len(models))
+	for _, model := range models {
+		byID[model.ID] = model
+	}
+	return byID
 }
