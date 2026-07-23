@@ -124,6 +124,7 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 	if parsed == nil {
 		return nil, fmt.Errorf("parse request: empty request")
 	}
+	ctx = withAnthropicContext1MFromParsed(ctx, parsed)
 	// API-key mappings and OAuth native IDs are resolved before mimicry.
 	validationModel := parsed.Model
 	if account != nil {
