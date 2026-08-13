@@ -11,7 +11,7 @@
         </p>
       </div>
       <!-- Login Form -->
-      <form v-if="!xsciSsoOnlyLogin" @submit.prevent="handleLogin" class="space-y-5">
+      <form v-if="!xsciSsoLandingLogin" @submit.prevent="handleLogin" class="space-y-5">
         <!-- Email Input -->
         <div>
           <label for="email" class="input-label">
@@ -230,13 +230,25 @@
           :disabled="authActionDisabled"
           :provider-name="normalizedOIDCProviderName"
           :show-divider="false"
+          variant="primary"
           @start="handleOAuthStart"
         />
+
+        <div class="text-center">
+          <router-link
+            :to="emailLoginRoute"
+            data-testid="email-login-entry"
+            class="inline-flex items-center justify-center gap-1.5 text-xs font-medium text-gray-500 transition-colors hover:text-primary-600 dark:text-dark-400 dark:hover:text-primary-300"
+          >
+            <Icon name="mail" size="sm" />
+            {{ t('auth.emailSignIn') }}
+          </router-link>
+        </div>
       </div>
     </div>
 
     <!-- Footer -->
-    <template v-if="!backendModeEnabled && !xsciSsoOnlyLogin" #footer>
+    <template v-if="!backendModeEnabled && !xsciSsoLandingLogin" #footer>
       <p class="text-gray-500 dark:text-dark-400">
         {{ t('auth.dontHaveAccount') }}
         <router-link
@@ -405,6 +417,15 @@ const normalizedOIDCProviderName = computed(() => normalizeOIDCProviderName(oidc
 const xsciSsoOnlyLogin = computed(
   () => !backendModeEnabled.value && oidcOAuthEnabled.value && isXSciOIDCProvider(oidcOAuthProviderName.value)
 )
+const emailLoginMode = computed(() => router.currentRoute.value.query.login === 'email')
+const xsciSsoLandingLogin = computed(() => xsciSsoOnlyLogin.value && !emailLoginMode.value)
+const emailLoginRoute = computed(() => ({
+  path: '/login',
+  query: {
+    ...router.currentRoute.value.query,
+    login: 'email'
+  }
+}))
 
 watch(validationToastMessage, (value, previousValue) => {
   if (value && value !== previousValue) {

@@ -213,6 +213,7 @@ export default {
     signInToAccount: '登录您的账户以继续',
     signIn: '登录',
     signingIn: '登录中...',
+    emailSignIn: '邮箱登录',
     passkeySignIn: '使用 Passkey 登录',
     passkeySigningIn: '正在等待 Passkey...',
     passkeyCancelled: '已取消 Passkey 登录。',
@@ -350,7 +351,10 @@ export default {
       invalidPendingToken: '注册凭证已失效，请重新登录。',
       completeRegistration: '完成注册',
       completing: '正在完成注册...',
-      completeRegistrationFailed: '注册失败，请检查邀请码后重试。'
+      completeRegistrationFailed: '注册失败，请检查邀请码后重试。',
+      error: {
+        orgNotAllowed: '当前账号没有 {providerName} 组织访问权限，请联系管理员开通，或切换已加入组织的账号。'
+      }
     },
     oauthFlow: {
       profileDetailsTitle: '使用 {providerName} 资料',

@@ -213,6 +213,7 @@ export default {
     signInToAccount: 'Sign in to your account to continue',
     signIn: 'Sign In',
     signingIn: 'Signing in...',
+    emailSignIn: 'Email login',
     passkeySignIn: 'Sign in with a passkey',
     passkeySigningIn: 'Waiting for passkey...',
     passkeyCancelled: 'Passkey sign-in was cancelled.',
@@ -352,7 +353,10 @@ export default {
       invalidPendingToken: 'The registration token has expired. Please sign in again.',
       completeRegistration: 'Complete Registration',
       completing: 'Completing registration…',
-      completeRegistrationFailed: 'Registration failed. Please check your invitation code and try again.'
+      completeRegistrationFailed: 'Registration failed. Please check your invitation code and try again.',
+      error: {
+        orgNotAllowed: 'This account does not have {providerName} organization access. Contact an administrator or switch to an account that has access.'
+      }
     },
     oauthFlow: {
       profileDetailsTitle: 'Use {providerName} profile details',

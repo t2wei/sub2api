@@ -166,6 +166,28 @@ describe('OidcCallbackView', () => {
     expect(replace).toHaveBeenCalledWith('/legacy-invite')
   })
 
+  it('shows a friendly organization-access error for OIDC org rejection', async () => {
+    window.location.hash =
+      '#error=org_not_allowed&error_description=userinfo+in_oxsci_org+must+be+true'
+
+    mount(OidcCallbackView, {
+      global: {
+        stubs: {
+          AuthLayout: { template: '<div><slot /></div>' },
+          Icon: true,
+          RouterLink: { template: '<a><slot /></a>' },
+          transition: false
+        }
+      }
+    })
+
+    await flushPromises()
+
+    expect(exchangePendingOAuthCompletion).not.toHaveBeenCalled()
+    expect(showError).toHaveBeenCalledWith('auth.oidc.error.orgNotAllowed:XSci')
+    expect(showError).not.toHaveBeenCalledWith(expect.stringContaining('in_oxsci_org'))
+  })
+
   it('does not send adoption decisions during the initial exchange', async () => {
     exchangePendingOAuthCompletion.mockResolvedValue({
       access_token: 'access-token',
