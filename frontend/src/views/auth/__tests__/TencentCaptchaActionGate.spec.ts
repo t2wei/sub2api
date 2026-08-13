@@ -10,11 +10,15 @@ const startOAuthLoginMock = vi.fn()
 const verifyActionMock = vi.fn()
 const captchaResetMock = vi.fn()
 const locationState = { href: 'http://localhost/login' }
+const routerMock = vi.hoisted(() => ({
+  currentRoute: { value: { query: {} as Record<string, unknown> } },
+  push: vi.fn()
+}))
 
 vi.mock('vue-router', () => ({
   useRouter: () => ({
-    currentRoute: { value: { query: {} } },
-    push: vi.fn()
+    currentRoute: routerMock.currentRoute,
+    push: routerMock.push
   })
 }))
 
@@ -80,6 +84,10 @@ const OidcButtonStub = defineComponent({
     providerName: {
       type: String,
       default: ''
+    },
+    variant: {
+      type: String,
+      default: 'secondary'
     }
   },
   emits: ['start'],
@@ -87,6 +95,7 @@ const OidcButtonStub = defineComponent({
     return () => h('button', {
       type: 'button',
       'data-testid': 'oidc-start',
+      'data-variant': props.variant,
       onClick: () => emit('start', {
         provider: 'oidc',
         params: { redirect: '/dashboard' }
@@ -95,7 +104,8 @@ const OidcButtonStub = defineComponent({
   }
 })
 
-function mountLogin() {
+function mountLogin(query: Record<string, unknown> = {}) {
+  routerMock.currentRoute.value = { query }
   return mount(LoginView, {
     global: {
       stubs: {
@@ -123,6 +133,8 @@ describe('Tencent captcha action gate', () => {
     startOAuthLoginMock.mockReset()
     verifyActionMock.mockReset()
     captchaResetMock.mockReset()
+    routerMock.push.mockReset()
+    routerMock.currentRoute.value = { query: {} }
     getPublicSettingsMock.mockResolvedValue({
       turnstile_enabled: false,
       turnstile_site_key: '',
@@ -247,8 +259,8 @@ describe('Tencent captcha action gate', () => {
     expect(loginWithPasskeyMock).not.toHaveBeenCalled()
   })
 
-  it('uses a single XSci SSO entry when the OIDC provider is the old OxSci name', async () => {
-    getPublicSettingsMock.mockResolvedValueOnce({
+  it('uses XSci SSO as the landing entry and keeps email login behind a small link', async () => {
+    const xsciSettings = {
       turnstile_enabled: false,
       turnstile_site_key: '',
       tencent_captcha_enabled: false,
@@ -263,7 +275,8 @@ describe('Tencent captcha action gate', () => {
       wechat_oauth_enabled: true,
       oidc_oauth_enabled: true,
       oidc_oauth_provider_name: 'OxSci'
-    })
+    }
+    getPublicSettingsMock.mockResolvedValueOnce(xsciSettings)
 
     const wrapper = mountLogin()
     await flushPromises()
@@ -274,5 +287,17 @@ describe('Tencent captcha action gate', () => {
     expect(wrapper.find('[data-testid="oauth-start"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="oidc-start"]').exists()).toBe(true)
     expect(wrapper.get('[data-testid="oidc-start"]').text()).toContain('XSci')
+    expect(wrapper.get('[data-testid="oidc-start"]').attributes('data-variant')).toBe('primary')
+    expect(wrapper.find('[data-testid="email-login-entry"]').exists()).toBe(true)
+
+    getPublicSettingsMock.mockResolvedValueOnce(xsciSettings)
+    const emailWrapper = mountLogin({ login: 'email' })
+    await flushPromises()
+
+    expect(emailWrapper.find('form').exists()).toBe(true)
+    expect(emailWrapper.find('#email').exists()).toBe(true)
+    expect(emailWrapper.find('#password').exists()).toBe(true)
+    expect(emailWrapper.find('[data-testid="email-login-entry"]').exists()).toBe(false)
+    expect(emailWrapper.get('[data-testid="oidc-start"]').attributes('data-variant')).toBe('secondary')
   })
 })

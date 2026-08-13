@@ -1,10 +1,12 @@
-import { flushPromises, mount } from '@vue/test-utils'
+import { flushPromises, mount, RouterLinkStub } from '@vue/test-utils'
+import { ref } from 'vue'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import LoginView from '@/views/auth/LoginView.vue'
 
-const { getPublicSettingsMock, pushMock } = vi.hoisted(() => ({
+const { getPublicSettingsMock, pushMock, routerState } = vi.hoisted(() => ({
   getPublicSettingsMock: vi.fn(),
-  pushMock: vi.fn()
+  pushMock: vi.fn(),
+  routerState: { currentRoute: { value: { query: {} as Record<string, string> } } }
 }))
 
 const publicSettings = {
@@ -33,7 +35,7 @@ const publicSettings = {
 vi.mock('vue-router', () => ({
   useRouter: () => ({
     push: pushMock,
-    currentRoute: { value: { query: {} } }
+    currentRoute: routerState.currentRoute
   })
 }))
 
@@ -80,7 +82,7 @@ function mountLogin() {
         LinuxDoOAuthSection: true,
         LoginAgreementPrompt: true,
         OidcOAuthSection: true,
-        RouterLink: { template: '<a><slot /></a>' },
+        RouterLink: RouterLinkStub,
         TotpLoginModal: true,
         TurnstileWidget: true,
         WechatOAuthSection: true,
@@ -94,6 +96,7 @@ describe('LoginView registration entry', () => {
   beforeEach(() => {
     getPublicSettingsMock.mockReset()
     pushMock.mockReset()
+    routerState.currentRoute = ref({ query: {} as Record<string, string> })
     getPublicSettingsMock.mockResolvedValue(publicSettings)
   })
 
@@ -113,6 +116,57 @@ describe('LoginView registration entry', () => {
     const wrapper = mountLogin()
     await flushPromises()
 
+    expect(wrapper.text()).not.toContain('auth.signUp')
+  })
+
+  it('shows XSci SSO as primary and preserves query parameters in the email entry', async () => {
+    routerState.currentRoute.value.query = { redirect: '/usage' }
+    getPublicSettingsMock.mockResolvedValueOnce({
+      ...publicSettings,
+      oidc_oauth_enabled: true,
+      oidc_oauth_provider_name: 'XSci'
+    })
+
+    const wrapper = mountLogin()
+    await flushPromises()
+
+    expect(wrapper.find('form').exists()).toBe(false)
+    expect(wrapper.getComponent({ name: 'OidcOAuthSection' }).props('variant')).toBe('primary')
+    expect(wrapper.text()).not.toContain('auth.signUp')
+    const emailEntry = wrapper.getComponent('[data-testid="email-login-entry"]')
+    expect(emailEntry.text()).toContain('auth.emailSignIn')
+    expect(emailEntry.props('to')).toEqual({
+      path: '/login',
+      query: { redirect: '/usage', login: 'email' }
+    })
+
+    routerState.currentRoute.value.query = emailEntry.props('to').query
+    await flushPromises()
+
+    expect(wrapper.find('form').exists()).toBe(true)
+    expect(wrapper.find('#email').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="email-login-entry"]').exists()).toBe(false)
+  })
+
+  it('keeps the full email form and hides registration in XSci email mode when disabled', async () => {
+    routerState.currentRoute.value.query = { login: 'email' }
+    getPublicSettingsMock.mockResolvedValueOnce({
+      ...publicSettings,
+      registration_enabled: false,
+      oidc_oauth_enabled: true,
+      oidc_oauth_provider_name: 'XSci',
+      password_reset_enabled: true
+    })
+
+    const wrapper = mountLogin()
+    await flushPromises()
+
+    expect(wrapper.get('form #email').attributes('type')).toBe('email')
+    expect(wrapper.get('form #password').attributes('type')).toBe('password')
+    expect(wrapper.get('form button[type="submit"]').text()).toContain('auth.signIn')
+    expect(wrapper.text()).toContain('auth.forgotPassword')
+    expect(wrapper.findComponent({ name: 'OidcOAuthSection' }).exists()).toBe(true)
+    expect(wrapper.find('[data-testid="email-login-entry"]').exists()).toBe(false)
     expect(wrapper.text()).not.toContain('auth.signUp')
   })
 })
