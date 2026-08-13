@@ -367,6 +367,20 @@ function parseFragmentParams(): URLSearchParams {
   return new URLSearchParams(hash)
 }
 
+function getOidcCallbackErrorMessage(error: string, description: string): string {
+  const normalizedError = error.trim()
+  const normalizedDescription = description.trim()
+  if (
+    normalizedError === 'org_not_allowed' ||
+    normalizedDescription.toLowerCase().includes('in_oxsci_org')
+  ) {
+    return t('auth.oidc.error.orgNotAllowed', {
+      providerName: providerName.value === 'OIDC' ? 'XSci' : providerName.value
+    })
+  }
+  return normalizedDescription || normalizedError
+}
+
 function readLegacyFragmentLogin(params: URLSearchParams): OAuthTokenResponse | null {
   const accessToken = params.get('access_token')?.trim() || ''
   if (!accessToken) {
@@ -802,7 +816,7 @@ onMounted(async () => {
     }
 
     if (error) {
-      errorMessage.value = errorDesc || error
+      errorMessage.value = getOidcCallbackErrorMessage(error, errorDesc)
       isProcessing.value = false
       return
     }

@@ -1,8 +1,9 @@
 <template>
   <div class="space-y-4">
-    <button type="button" :disabled="disabled" class="btn btn-secondary w-full" @click="startLogin">
+    <button type="button" :disabled="disabled" class="btn w-full" :class="buttonClass" @click="startLogin">
       <span
-        class="mr-2 inline-flex h-5 w-5 items-center justify-center rounded-full bg-primary-100 text-xs font-semibold text-primary-700 dark:bg-primary-900/30 dark:text-primary-300"
+        class="mr-2 inline-flex h-5 w-5 items-center justify-center rounded-full text-xs font-semibold"
+        :class="providerInitialClass"
       >
         {{ providerInitial }}
       </span>
@@ -32,9 +33,11 @@ const props = withDefaults(defineProps<{
   affCode?: string
   providerName?: string
   showDivider?: boolean
+  variant?: 'primary' | 'secondary'
 }>(), {
   providerName: 'OIDC',
-  showDivider: true
+  showDivider: true,
+  variant: 'secondary'
 })
 const emit = defineEmits<{
   start: [request: OAuthLoginStart]
@@ -48,6 +51,12 @@ const normalizedProviderName = computed(() => {
 })
 
 const providerInitial = computed(() => normalizedProviderName.value.charAt(0).toUpperCase() || 'O')
+const buttonClass = computed(() => (props.variant === 'primary' ? 'btn-primary' : 'btn-secondary'))
+const providerInitialClass = computed(() =>
+  props.variant === 'primary'
+    ? 'bg-white/20 text-white'
+    : 'bg-primary-100 text-primary-700 dark:bg-primary-900/30 dark:text-primary-300'
+)
 
 function startLogin(): void {
   const redirectTo = (route.query.redirect as string) || '/dashboard'
