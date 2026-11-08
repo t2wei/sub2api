@@ -28,8 +28,8 @@ func TestGatewayMessagesEmitsLLMLifecycle(t *testing.T) {
 				ID: 1001, Name: "logging-test", Platform: service.PlatformAntigravity,
 				Type: service.AccountTypeOAuth, Status: service.StatusActive, Schedulable: true,
 				Concurrency: 1, Priority: 1,
-				Credentials:   map[string]interface{}{"access_token": "account-secret", "intercept_warmup_requests": true},
-				Extra:         map[string]interface{}{"mixed_scheduling": true},
+				Credentials:   map[string]any{"access_token": "account-secret", "intercept_warmup_requests": true},
+				Extra:         map[string]any{"mixed_scheduling": true},
 				AccountGroups: []service.AccountGroup{{AccountID: 1001, GroupID: groupID}},
 			}}
 			if scenario == "no-account" {
@@ -63,7 +63,7 @@ func TestGatewayMessagesEmitsLLMLifecycle(t *testing.T) {
 				require.Equal(t, http.StatusOK, rec.Code)
 				require.Equal(t, "success", update.body["status"])
 				require.NotEmpty(t, update.body["response_messages"])
-				require.Equal(t, float64(1001), update.body["meta"].(map[string]interface{})["account_id"])
+				require.Equal(t, float64(1001), requireLLMLogValue[map[string]any](t, update.body["meta"])["account_id"])
 			}
 		})
 	}

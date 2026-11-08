@@ -11,18 +11,18 @@ import (
 type RequestLifecycleHook interface {
 	// OnRequestStart 在请求开始时调用
 	// 返回一个 opaque context 值，用于在后续 Hook 调用中关联上下文
-	OnRequestStart(ctx context.Context, req *RequestStartEvent) interface{}
+	OnRequestStart(ctx context.Context, req *RequestStartEvent) any
 
 	// OnRequestSuccess 在请求成功时调用
-	OnRequestSuccess(ctx context.Context, requestCtx interface{}, event *RequestSuccessEvent)
+	OnRequestSuccess(ctx context.Context, requestCtx any, event *RequestSuccessEvent)
 
 	// OnRequestError 在请求失败时调用
-	OnRequestError(ctx context.Context, requestCtx interface{}, event *RequestErrorEvent)
+	OnRequestError(ctx context.Context, requestCtx any, event *RequestErrorEvent)
 }
 
 // RequestStartEvent 请求开始事件
 type RequestStartEvent struct {
-	Body     interface{}     // 请求体（可能是 *service.ParsedRequest 或其他类型）
+	Body     any             // 请求体（可能是 *service.ParsedRequest 或其他类型）
 	Platform string          // 平台名称
 	APIKey   *service.APIKey // API Key
 	User     *service.User   // 用户信息
@@ -31,7 +31,7 @@ type RequestStartEvent struct {
 // RequestSuccessEvent 请求成功事件
 type RequestSuccessEvent struct {
 	Result            *service.ForwardResult // 转发结果
-	ResponseMessages  []map[string]interface{}
+	ResponseMessages  []map[string]any
 	ResponseTruncated bool
 	Account           *service.Account // 使用的账号
 	APIKey            *service.APIKey  // API Key
@@ -42,7 +42,7 @@ type RequestSuccessEvent struct {
 type RequestErrorEvent struct {
 	Error             error // 错误信息
 	Result            *service.ForwardResult
-	ResponseMessages  []map[string]interface{}
+	ResponseMessages  []map[string]any
 	ResponseTruncated bool
 	Account           *service.Account // 使用的账号（可能为 nil）
 	APIKey            *service.APIKey  // API Key
@@ -52,14 +52,14 @@ type RequestErrorEvent struct {
 // NoOpHook 是一个空操作的 Hook 实现（默认实现）
 type NoOpHook struct{}
 
-func (h *NoOpHook) OnRequestStart(ctx context.Context, req *RequestStartEvent) interface{} {
+func (h *NoOpHook) OnRequestStart(ctx context.Context, req *RequestStartEvent) any {
 	return nil
 }
 
-func (h *NoOpHook) OnRequestSuccess(ctx context.Context, requestCtx interface{}, event *RequestSuccessEvent) {
+func (h *NoOpHook) OnRequestSuccess(ctx context.Context, requestCtx any, event *RequestSuccessEvent) {
 }
 
-func (h *NoOpHook) OnRequestError(ctx context.Context, requestCtx interface{}, event *RequestErrorEvent) {
+func (h *NoOpHook) OnRequestError(ctx context.Context, requestCtx any, event *RequestErrorEvent) {
 }
 
 // CompositeHook 组合多个 Hook，按顺序执行
@@ -74,17 +74,17 @@ func NewCompositeHook(hooks ...RequestLifecycleHook) *CompositeHook {
 	}
 }
 
-func (h *CompositeHook) OnRequestStart(ctx context.Context, req *RequestStartEvent) interface{} {
+func (h *CompositeHook) OnRequestStart(ctx context.Context, req *RequestStartEvent) any {
 	// 为每个子 Hook 创建一个 context map
-	contexts := make(map[int]interface{})
+	contexts := make(map[int]any)
 	for i, hook := range h.hooks {
 		contexts[i] = hook.OnRequestStart(ctx, req)
 	}
 	return contexts
 }
 
-func (h *CompositeHook) OnRequestSuccess(ctx context.Context, requestCtx interface{}, event *RequestSuccessEvent) {
-	contexts, ok := requestCtx.(map[int]interface{})
+func (h *CompositeHook) OnRequestSuccess(ctx context.Context, requestCtx any, event *RequestSuccessEvent) {
+	contexts, ok := requestCtx.(map[int]any)
 	if !ok {
 		// 如果类型不匹配，尝试直接传递（兼容性处理）
 		for _, hook := range h.hooks {
@@ -98,8 +98,8 @@ func (h *CompositeHook) OnRequestSuccess(ctx context.Context, requestCtx interfa
 	}
 }
 
-func (h *CompositeHook) OnRequestError(ctx context.Context, requestCtx interface{}, event *RequestErrorEvent) {
-	contexts, ok := requestCtx.(map[int]interface{})
+func (h *CompositeHook) OnRequestError(ctx context.Context, requestCtx any, event *RequestErrorEvent) {
+	contexts, ok := requestCtx.(map[int]any)
 	if !ok {
 		// 如果类型不匹配，尝试直接传递（兼容性处理）
 		for _, hook := range h.hooks {

@@ -22,14 +22,21 @@ type loggedCall struct {
 	method string
 	path   string
 	key    string
-	body   map[string]interface{}
+	body   map[string]any
+}
+
+func requireLLMLogValue[T any](t *testing.T, value any) T {
+	t.Helper()
+	typed, ok := value.(T)
+	require.Truef(t, ok, "expected %T, got %T", *new(T), value)
+	return typed
 }
 
 func newTestLLMLogSink(t *testing.T) (*LLMLoggingHook, <-chan loggedCall) {
 	t.Helper()
 	calls := make(chan loggedCall, 10)
 	sink := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var body map[string]interface{}
+		var body map[string]any
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			w.WriteHeader(http.StatusBadRequest)
 			return
@@ -69,7 +76,7 @@ func testLLMLifecycle(t *testing.T, hook RequestLifecycleHook) (*gin.Context, *h
 		ID: 7, Key: "api-key-secret", User: &service.User{ID: 8},
 	})
 	if lifecycle != nil {
-		lifecycle.account = &service.Account{ID: 9, Credentials: map[string]interface{}{"access_token": "account-secret"}}
+		lifecycle.account = &service.Account{ID: 9, Credentials: map[string]any{"access_token": "account-secret"}}
 	}
 	return c, rec, lifecycle
 }
@@ -98,10 +105,16 @@ func TestLLMLoggingJSONDelivery(t *testing.T) {
 	require.Equal(t, http.MethodPut, update.method)
 	require.Equal(t, "/llm-calls/42", update.path)
 	require.Equal(t, "success", update.body["status"])
-	require.Equal(t, float64(12), update.body["meta"].(map[string]interface{})["input_tokens"])
-	require.Equal(t, float64(9), update.body["meta"].(map[string]interface{})["account_id"])
-	require.Contains(t, update.body["response_messages"].([]interface{})[0].(map[string]interface{})["content"].([]interface{})[0], "text")
-	encoded, err := json.Marshal([]map[string]interface{}{create.body, update.body})
+	meta := requireLLMLogValue[map[string]any](t, update.body["meta"])
+	require.Equal(t, float64(12), meta["input_tokens"])
+	require.Equal(t, float64(9), meta["account_id"])
+	messages := requireLLMLogValue[[]any](t, update.body["response_messages"])
+	require.Len(t, messages, 1)
+	message := requireLLMLogValue[map[string]any](t, messages[0])
+	content := requireLLMLogValue[[]any](t, message["content"])
+	require.Len(t, content, 1)
+	require.Contains(t, requireLLMLogValue[map[string]any](t, content[0]), "text")
+	encoded, err := json.Marshal([]map[string]any{create.body, update.body})
 	require.NoError(t, err)
 	require.NotContains(t, string(encoded), "secret")
 }
@@ -130,10 +143,13 @@ func TestLLMLoggingStreamPreservesFlushAndCapturesTools(t *testing.T) {
 	_ = receiveLLMCall(t, calls)
 	update := receiveLLMCall(t, calls)
 	require.Equal(t, "success", update.body["status"])
-	messages := update.body["response_messages"].([]interface{})
-	content := messages[0].(map[string]interface{})["content"].([]interface{})
-	require.Equal(t, "hello", content[0].(map[string]interface{})["text"])
-	require.Equal(t, map[string]interface{}{"q": "hello"}, content[1].(map[string]interface{})["input"])
+	messages := requireLLMLogValue[[]any](t, update.body["response_messages"])
+	require.Len(t, messages, 1)
+	message := requireLLMLogValue[map[string]any](t, messages[0])
+	content := requireLLMLogValue[[]any](t, message["content"])
+	require.Len(t, content, 2)
+	require.Equal(t, "hello", requireLLMLogValue[map[string]any](t, content[0])["text"])
+	require.Equal(t, map[string]any{"q": "hello"}, requireLLMLogValue[map[string]any](t, content[1])["input"])
 }
 
 func TestLLMLoggingErrorsAndCancellation(t *testing.T) {
@@ -176,7 +192,7 @@ func TestLLMLoggingCaptureBoundAndDisabled(t *testing.T) {
 	lifecycle.finish(c)
 	_ = receiveLLMCall(t, calls)
 	update := receiveLLMCall(t, calls)
-	require.Equal(t, true, update.body["meta"].(map[string]interface{})["response_truncated"])
+	require.Equal(t, true, requireLLMLogValue[map[string]any](t, update.body["meta"])["response_truncated"])
 
 	parsed, err := service.ParseGatewayRequest(service.NewRequestBodyRef([]byte(`{"model":"claude-test","messages":[{"role":"user","content":"`+large+`"}]}`)), service.PlatformAnthropic)
 	require.NoError(t, err)

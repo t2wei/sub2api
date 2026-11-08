@@ -178,7 +178,7 @@ func (s *AuthService) createEmailOAuthUser(ctx context.Context, email, username,
 		return nil, ErrEmailBlocked
 	}
 	var invitationRedeemCode *RedeemCode
-	if !(normalizeOAuthSignupSource(providerType) == "oidc" && trustedOrg) {
+	if normalizeOAuthSignupSource(providerType) != "oidc" || !trustedOrg {
 		var err error
 		invitationRedeemCode, err = s.validateOAuthRegistrationInvitation(ctx, invitationCode)
 		if err != nil {
