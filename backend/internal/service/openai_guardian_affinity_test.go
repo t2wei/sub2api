@@ -373,16 +373,24 @@ func TestOpenAIGatewayService_PreviousResponseHonorsGroupAndRequiredPrivacy(t *t
 				nil, OpenAIUpstreamTransportAny, OpenAIEndpointCapabilityResponses,
 				false, false, true,
 			)
-			require.NoError(t, err)
-			require.NotNil(t, selection)
-			require.Equal(t, fallback.ID, selection.Account.ID)
+			if tc.groupErr != nil {
+				// Unknown strict routing policy cannot admit even a privacy-set
+				// fallback. Keep the response binding for a later healthy retry.
+				require.ErrorIs(t, err, ErrNoAvailableAccounts)
+				require.ErrorIs(t, err, tc.groupErr)
+				require.Nil(t, selection)
+			} else {
+				require.NoError(t, err)
+				require.NotNil(t, selection)
+				require.Equal(t, fallback.ID, selection.Account.ID)
+			}
 			require.NotEqual(t, openAIAccountScheduleLayerPreviousResponse, decision.Layer)
 			require.Zero(t, repo.setErrorCalls)
 			require.False(t, svc.isOpenAIAccountRequestRuntimeBlocked(&accounts[0], codexAutoReviewModel))
 			boundAccountID, getErr := store.GetResponseAccount(context.Background(), groupID, responseID)
 			require.NoError(t, getErr)
 			require.Equal(t, tc.boundAccount.ID, boundAccountID, "transient policy misses must preserve the response binding")
-			if selection.ReleaseFunc != nil {
+			if selection != nil && selection.ReleaseFunc != nil {
 				selection.ReleaseFunc()
 			}
 		})
