@@ -472,6 +472,12 @@ func (s *OpenAIGatewayService) selectAccountByPreviousResponseIDForCapability(
 	if s == nil {
 		return nil, nil
 	}
+	ctx, routeErr := s.withOpenAIGroupModelRouting(ctx, groupID, PlatformOpenAI, requestedModel)
+	if routeErr != nil {
+		// This lookup is an optional sticky hit. A failed policy lookup must
+		// never reuse the account; the full scheduler reports the lookup error.
+		return nil, nil
+	}
 	accountID, account, responseID, store := s.resolveAccountByPreviousResponseIDForCapability(ctx, groupID, previousResponseID, requestedModel, excludedIDs, requiredCapability, requireCompact)
 	if accountID <= 0 || account == nil || store == nil {
 		return nil, nil
@@ -516,6 +522,10 @@ func (s *OpenAIGatewayService) ResolveAccountIDByPreviousResponseIDForScheduler(
 	requiredCapability OpenAIEndpointCapability,
 	requireCompact bool,
 ) int64 {
+	ctx, routeErr := s.withOpenAIGroupModelRouting(ctx, groupID, PlatformOpenAI, requestedModel)
+	if routeErr != nil {
+		return 0
+	}
 	accountID, _, _, _ := s.resolveAccountByPreviousResponseIDForCapability(ctx, groupID, previousResponseID, requestedModel, excludedIDs, requiredCapability, requireCompact)
 	return accountID
 }
@@ -554,6 +564,9 @@ func (s *OpenAIGatewayService) resolveAccountByPreviousResponseIDForCapability(
 	account, err := s.getSchedulableAccount(ctx, accountID)
 	if err != nil || account == nil {
 		_ = store.DeleteResponseAccount(ctx, derefGroupID(groupID), responseID)
+		return 0, nil, "", nil
+	}
+	if !openAIGroupModelRoutingAllows(ctx, account) {
 		return 0, nil, "", nil
 	}
 	// OAuth/SetupToken continuation state lives on the WSv2 session and cannot
