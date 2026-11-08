@@ -12,6 +12,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func modelRoutingGroupID(id int64) *int64 { return &id }
+
 type modelRoutingGroupRepo struct {
 	GroupRepository
 	group *Group
@@ -111,7 +113,7 @@ func TestOpenAIGroupModelRouting_AllSchedulerModes(t *testing.T) {
 					require.NoError(t, svc.getOpenAIWSStateStore().BindResponseAccount(ctx, groupID, previousID, tc.previous, time.Hour))
 				}
 				excludedBefore := cloneExcludedAccountIDs(tc.excluded)
-				selection, _, err := svc.SelectAccountWithScheduler(ctx, ptrInt64(groupID), previousID, "routing-session", tc.model, tc.excluded, OpenAIUpstreamTransportAny, false)
+				selection, _, err := svc.SelectAccountWithScheduler(ctx, modelRoutingGroupID(groupID), previousID, "routing-session", tc.model, tc.excluded, OpenAIUpstreamTransportAny, false)
 				require.NoError(t, err)
 				require.NotNil(t, selection)
 				require.Equal(t, tc.want, selection.Account.ID)
@@ -154,7 +156,7 @@ func TestOpenAIGroupModelRouting_UnavailableTargetsNeverFallBack(t *testing.T) {
 					repo.accounts[2].Credentials = map[string]any{"model_mapping": map[string]any{"other-test": "other-test"}}
 				}
 				before := cloneExcludedAccountIDs(excluded)
-				selection, _, err := svc.SelectAccountWithScheduler(ctx, ptrInt64(groupID), "", "", "gpt-restricted-test", excluded, OpenAIUpstreamTransportAny, false)
+				selection, _, err := svc.SelectAccountWithScheduler(ctx, modelRoutingGroupID(groupID), "", "", "gpt-restricted-test", excluded, OpenAIUpstreamTransportAny, false)
 				require.ErrorIs(t, err, ErrNoAvailableAccounts)
 				require.Nil(t, selection)
 				require.Equal(t, before, excluded)
@@ -193,7 +195,7 @@ func TestOpenAIGroupModelRouting_AuthAndScheduledGroups(t *testing.T) {
 				ctx := context.WithValue(context.Background(), ctxkey.Group, authGroup)
 				svc, repo := modelRoutingTestService(groupID, mode, &schedulerTestGatewayCache{}, schedulerTestConcurrencyCache{})
 				svc.schedulerSnapshot = &SchedulerSnapshotService{accountRepo: repo, groupRepo: groupRepo}
-				selection, _, err := svc.SelectAccountWithScheduler(ctx, ptrInt64(groupID), "", "", "gpt-restricted-test", nil, OpenAIUpstreamTransportAny, false)
+				selection, _, err := svc.SelectAccountWithScheduler(ctx, modelRoutingGroupID(groupID), "", "", "gpt-restricted-test", nil, OpenAIUpstreamTransportAny, false)
 				if source == "lookup error" || source == "missing group" || source == "wrong group" {
 					require.ErrorIs(t, err, ErrNoAvailableAccounts)
 					require.Nil(t, selection)
@@ -220,20 +222,20 @@ func TestOpenAIGroupModelRouting_DirectLegacyAndPreviousResponseEntries(t *testi
 	const groupID int64 = 43004
 	ctx := context.WithValue(context.Background(), ctxkey.Group, modelRoutingTestGroup(groupID))
 	svc, _ := modelRoutingTestService(groupID, modelRoutingModes[0], &schedulerTestGatewayCache{sessionBindings: map[string]int64{"openai:wrong": 27}}, schedulerTestConcurrencyCache{})
-	account, err := svc.SelectAccountForModelWithExclusions(ctx, ptrInt64(groupID), "wrong", "gpt-restricted-test", nil)
+	account, err := svc.SelectAccountForModelWithExclusions(ctx, modelRoutingGroupID(groupID), "wrong", "gpt-restricted-test", nil)
 	require.NoError(t, err)
 	require.Equal(t, int64(30), account.ID)
-	selection, err := svc.SelectAccountWithLoadAwareness(ctx, ptrInt64(groupID), "wrong", "gpt-restricted-test", nil)
+	selection, err := svc.SelectAccountWithLoadAwareness(ctx, modelRoutingGroupID(groupID), "wrong", "gpt-restricted-test", nil)
 	require.NoError(t, err)
 	require.Equal(t, int64(30), selection.Account.ID)
 	if selection.ReleaseFunc != nil {
 		selection.ReleaseFunc()
 	}
 	require.NoError(t, svc.getOpenAIWSStateStore().BindResponseAccount(ctx, groupID, "resp_wrong_route", 27, time.Hour))
-	selection, err = svc.SelectAccountByPreviousResponseID(ctx, ptrInt64(groupID), "resp_wrong_route", "gpt-restricted-test", nil, false)
+	selection, err = svc.SelectAccountByPreviousResponseID(ctx, modelRoutingGroupID(groupID), "resp_wrong_route", "gpt-restricted-test", nil, false)
 	require.NoError(t, err)
 	require.Nil(t, selection)
-	require.Zero(t, svc.ResolveAccountIDByPreviousResponseIDForScheduler(ctx, ptrInt64(groupID), "resp_wrong_route", "gpt-restricted-test", nil, "", false))
+	require.Zero(t, svc.ResolveAccountIDByPreviousResponseIDForScheduler(ctx, modelRoutingGroupID(groupID), "resp_wrong_route", "gpt-restricted-test", nil, "", false))
 }
 
 func TestOpenAIGroupModelRouting_WeightedPreviousResponseCannotBypass(t *testing.T) {
@@ -241,7 +243,7 @@ func TestOpenAIGroupModelRouting_WeightedPreviousResponseCannotBypass(t *testing
 	ctx := context.WithValue(context.Background(), ctxkey.Group, modelRoutingTestGroup(groupID))
 	svc, _ := modelRoutingTestService(groupID, modelRoutingModes[3], &schedulerTestGatewayCache{}, schedulerTestConcurrencyCache{})
 	require.NoError(t, svc.getOpenAIWSStateStore().BindResponseAccount(ctx, groupID, "resp_movable_wrong_route", 27, time.Hour))
-	selection, _, err := svc.SelectAccountWithSchedulerForCapability(ctx, ptrInt64(groupID), "resp_movable_wrong_route", "", "gpt-restricted-test", nil, OpenAIUpstreamTransportAny, OpenAIEndpointCapabilityResponses, false, true, true)
+	selection, _, err := svc.SelectAccountWithSchedulerForCapability(ctx, modelRoutingGroupID(groupID), "resp_movable_wrong_route", "", "gpt-restricted-test", nil, OpenAIUpstreamTransportAny, OpenAIEndpointCapabilityResponses, false, true, true)
 	require.NoError(t, err)
 	require.Equal(t, int64(30), selection.Account.ID)
 	if selection.ReleaseFunc != nil {
@@ -257,7 +259,7 @@ func TestOpenAIGroupModelRouting_ReusedContextDoesNotLeak(t *testing.T) {
 				group := modelRoutingTestGroup(firstID)
 				ctx := context.WithValue(context.Background(), ctxkey.Group, group)
 				svc, repo := modelRoutingTestService(firstID, mode, &schedulerTestGatewayCache{}, schedulerTestConcurrencyCache{})
-				ctx, err := svc.withOpenAIGroupModelRouting(ctx, ptrInt64(firstID), PlatformOpenAI, "gpt-restricted-test")
+				ctx, err := svc.withOpenAIGroupModelRouting(ctx, modelRoutingGroupID(firstID), PlatformOpenAI, "gpt-restricted-test")
 				require.NoError(t, err)
 				groupID, model := firstID, "gpt-normal-test"
 				if changed == "group with routing disabled" {
@@ -293,7 +295,7 @@ func TestOpenAIGroupModelRouting_FreshMembershipStillRequired(t *testing.T) {
 				snapshotAccounts: []*Account{&repo.accounts[0], &repo.accounts[1], &stale},
 				accountsByID:     map[int64]*Account{27: &repo.accounts[0], 28: &repo.accounts[1], 30: &stale},
 			}}
-			selection, _, err := svc.SelectAccountWithScheduler(ctx, ptrInt64(groupID), "", "", "gpt-restricted-test", nil, OpenAIUpstreamTransportAny, false)
+			selection, _, err := svc.SelectAccountWithScheduler(ctx, modelRoutingGroupID(groupID), "", "", "gpt-restricted-test", nil, OpenAIUpstreamTransportAny, false)
 			require.ErrorIs(t, err, ErrNoAvailableAccounts)
 			require.Nil(t, selection)
 		})
@@ -323,7 +325,7 @@ func TestOpenAIGroupModelRouting_EmptyAndOverlappingRules(t *testing.T) {
 				}
 				ctx := context.WithValue(context.Background(), ctxkey.Group, group)
 				svc, _ := modelRoutingTestService(groupID, mode, &schedulerTestGatewayCache{}, schedulerTestConcurrencyCache{})
-				selection, _, err := svc.SelectAccountWithScheduler(ctx, ptrInt64(groupID), "", "", model, nil, OpenAIUpstreamTransportAny, false)
+				selection, _, err := svc.SelectAccountWithScheduler(ctx, modelRoutingGroupID(groupID), "", "", model, nil, OpenAIUpstreamTransportAny, false)
 				if rule != "nonempty specific wildcard" {
 					require.ErrorIs(t, err, ErrNoAvailableAccounts)
 					require.Nil(t, selection)
@@ -344,13 +346,13 @@ func TestOpenAIGroupModelRouting_FixedAccountValidation(t *testing.T) {
 	const groupID int64 = 43009
 	ctx := context.WithValue(context.Background(), ctxkey.Group, modelRoutingTestGroup(groupID))
 	svc := &OpenAIGatewayService{}
-	require.NoError(t, svc.ValidateAccountModelRouting(ctx, ptrInt64(groupID), PlatformOpenAI, "gpt-normal-test", &Account{ID: 27}))
-	require.ErrorIs(t, svc.ValidateAccountModelRouting(ctx, ptrInt64(groupID), PlatformOpenAI, "gpt-restricted-test", &Account{ID: 27}), ErrNoAvailableAccounts)
-	require.NoError(t, svc.ValidateAccountModelRouting(ctx, ptrInt64(groupID), PlatformOpenAI, "gpt-restricted-test", &Account{ID: 30}))
+	require.NoError(t, svc.ValidateAccountModelRouting(ctx, modelRoutingGroupID(groupID), PlatformOpenAI, "gpt-normal-test", &Account{ID: 27}))
+	require.ErrorIs(t, svc.ValidateAccountModelRouting(ctx, modelRoutingGroupID(groupID), PlatformOpenAI, "gpt-restricted-test", &Account{ID: 27}), ErrNoAvailableAccounts)
+	require.NoError(t, svc.ValidateAccountModelRouting(ctx, modelRoutingGroupID(groupID), PlatformOpenAI, "gpt-restricted-test", &Account{ID: 30}))
 	require.ErrorIs(t, svc.ValidateAccountModelRouting(context.Background(), nil, PlatformOpenAI, "", nil), ErrNoAvailableAccounts)
 	lookupErr := errors.New("routing lookup unavailable")
 	svc.schedulerSnapshot = &SchedulerSnapshotService{groupRepo: &modelRoutingGroupRepo{err: lookupErr}}
-	require.ErrorIs(t, svc.ValidateAccountModelRouting(context.Background(), ptrInt64(groupID), PlatformOpenAI, "gpt-restricted-test", &Account{ID: 30}), lookupErr)
+	require.ErrorIs(t, svc.ValidateAccountModelRouting(context.Background(), modelRoutingGroupID(groupID), PlatformOpenAI, "gpt-restricted-test", &Account{ID: 30}), lookupErr)
 }
 
 func TestOpenAIGroupModelRouting_AmbiguousCandidates(t *testing.T) {
@@ -376,7 +378,7 @@ func TestOpenAIGroupModelRouting_AmbiguousCandidates(t *testing.T) {
 				group.ModelRouting["gpt-restricted-test"] = nil
 			}
 			ctx := context.WithValue(context.Background(), ctxkey.Group, group)
-			err := svc.ValidateModelRoutingCandidates(ctx, ptrInt64(groupID), PlatformOpenAI, tc.models)
+			err := svc.ValidateModelRoutingCandidates(ctx, modelRoutingGroupID(groupID), PlatformOpenAI, tc.models)
 			if tc.wantError {
 				require.ErrorIs(t, err, ErrNoAvailableAccounts)
 				require.ErrorContains(t, err, "ambiguous model routing")
