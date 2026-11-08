@@ -625,16 +625,16 @@ func (s *GatewayService) computeFinalAnthropicBeta(
 	if clientBeta != "" {
 		return mergeAnthropicBetaDropping(extraRequiredBetas, clientBeta, effectiveDropSet), true
 	}
-	if len(extraRequiredBetas) > 0 {
-		merged := mergeAnthropicBetaDropping(extraRequiredBetas, "", effectiveDropSet)
-		return merged, merged != ""
-	}
 	if s.cfg != nil && s.cfg.Gateway.InjectBetaForAPIKey {
 		if requestNeedsBetaFeatures(body) {
 			if beta := defaultAPIKeyBetaHeader(body); beta != "" {
 				return mergeAnthropicBetaDropping(extraRequiredBetas, beta, effectiveDropSet), true
 			}
 		}
+	}
+	if len(extraRequiredBetas) > 0 {
+		merged := mergeAnthropicBetaDropping(extraRequiredBetas, "", effectiveDropSet)
+		return merged, merged != ""
 	}
 	return "", false
 }
@@ -688,16 +688,16 @@ func (s *GatewayService) computeFinalCountTokensAnthropicBeta(
 	if clientBeta != "" {
 		return mergeAnthropicBetaDropping(extraRequiredBetas, clientBeta, effectiveDropSet), true
 	}
-	if len(extraRequiredBetas) > 0 {
-		merged := mergeAnthropicBetaDropping(extraRequiredBetas, "", effectiveDropSet)
-		return merged, merged != ""
-	}
 	if s.cfg != nil && s.cfg.Gateway.InjectBetaForAPIKey {
 		if requestNeedsBetaFeatures(body) {
 			if beta := defaultAPIKeyBetaHeader(body); beta != "" {
 				return mergeAnthropicBetaDropping(extraRequiredBetas, beta, effectiveDropSet), true
 			}
 		}
+	}
+	if len(extraRequiredBetas) > 0 {
+		merged := mergeAnthropicBetaDropping(extraRequiredBetas, "", effectiveDropSet)
+		return merged, merged != ""
 	}
 	return "", false
 }
