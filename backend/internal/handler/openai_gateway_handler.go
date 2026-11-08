@@ -471,6 +471,9 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 	}
 	reqModel := modelResult.String()
 	ensureCompositeTargetPlatform(c, apiKey, reqModel)
+	if h.rejectAmbiguousModelRouting(c, apiKey, body, h.errorResponse) {
+		return
+	}
 	if !openAICompatibleTextTargetAllowed(c, apiKey, reqModel) {
 		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "Model is not supported by this OpenAI-compatible endpoint for composite groups")
 		return
@@ -1231,6 +1234,9 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 	}
 	reqModel := modelResult.String()
 	ensureCompositeTargetPlatform(c, apiKey, reqModel)
+	if h.rejectAmbiguousModelRouting(c, apiKey, body, h.anthropicErrorResponse) {
+		return
+	}
 	if !openAICompatibleTextTargetAllowed(c, apiKey, reqModel) {
 		h.anthropicErrorResponse(c, http.StatusBadRequest, "invalid_request_error", "Model is not supported by this OpenAI-compatible endpoint for composite groups")
 		return
@@ -2602,6 +2608,10 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 			return
 		}
 	}
+	if err := h.gatewayService.ValidateModelRoutingCandidates(ctx, apiKey.GroupID, openAICompatibleRequestPlatform(ctx, apiKey), requestmodel.FromBodyCandidates("", "application/json", firstMessage)); err != nil {
+		closeOpenAIClientWS(wsConn, coderws.StatusPolicyViolation, openAIModelRoutingAmbiguousMessage)
+		return
+	}
 	previousResponseID := strings.TrimSpace(gjson.GetBytes(firstMessage, "previous_response_id").String())
 	previousResponseIDKind := service.ClassifyOpenAIPreviousResponseIDKind(previousResponseID)
 	if previousResponseID != "" && previousResponseIDKind == service.OpenAIPreviousResponseIDKindMessageID {
@@ -3046,6 +3056,9 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 				// 帧内重复 model 键/大小写变体/嵌套 session.model 额外逐一校验，
 				// 防止候选集非空时掩盖被轮换掉的禁用模型。
 				candidates := append([]string{model}, requestmodel.FromBodyCandidates("", "application/json", payload)...)
+				if err := h.gatewayService.ValidateModelRoutingCandidates(ctx, apiKey.GroupID, requestPlatform, candidates); err != nil {
+					return service.NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, openAIModelRoutingAmbiguousMessage, fmt.Errorf("%w: %v", errOpenAIWSUnsupportedModelSwitch, err))
+				}
 				if blocked := blockedModelAllowlistCandidate(apiKey.Group, candidates); blocked != "" {
 					service.MarkOpsClientBusinessLimited(c, service.OpsClientBusinessLimitedReasonLocalModelConfiguration)
 					middleware2.MarkIngressRejected(c, middleware2.IngressRejectModelNotAllowed)
@@ -3073,6 +3086,13 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 					routeModel = wsRouteModel
 				}
 				mapping, _ := h.gatewayService.ResolveChannelMappingAndRestrict(ctx, apiKey.GroupID, routeModel)
+				// A WebSocket keeps one upstream account for its lifetime. Recheck
+				// every effective turn model before writing to that account; a route
+				// change requires a new connection, never silent continuation migration.
+				forwardModel := openAIChannelForwardModel(mapping, routeModel)
+				if err := h.gatewayService.ValidateAccountModelRouting(ctx, apiKey.GroupID, requestPlatform, forwardModel, account); err != nil {
+					return "", service.NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, openAIModelRoutingAccountMessage, fmt.Errorf("%w: %v", errOpenAIWSUnsupportedModelSwitch, err))
+				}
 				mappedModelUnchanged := false
 				if previous := turnChannelMapping.Load(); previous != nil && previous.turn < turn {
 					mappedModelUnchanged = strings.TrimSpace(previous.mapping.MappedModel) == strings.TrimSpace(mapping.MappedModel)
