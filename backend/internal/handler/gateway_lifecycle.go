@@ -55,7 +55,7 @@ func (w *lifecycleResponseWriter) WriteString(s string) (int, error) {
 
 type gatewayRequestLifecycle struct {
 	hook       RequestLifecycleHook
-	requestCtx interface{}
+	requestCtx any
 	writer     *lifecycleResponseWriter
 	apiKey     *service.APIKey
 	account    *service.Account
@@ -120,37 +120,37 @@ func (l *gatewayRequestLifecycle) finish(c *gin.Context) {
 	})
 }
 
-func llmRequestMessages(parsed *service.ParsedRequest) ([]map[string]interface{}, bool) {
+func llmRequestMessages(parsed *service.ParsedRequest) ([]map[string]any, bool) {
 	// Do not decode large image/file payloads just to log them. The marker makes
 	// omission explicit, and no partial JSON or arbitrary top-level metadata leaks.
 	if len(parsed.MessagesRaw())+len(parsed.SystemRaw()) > llmLogCaptureLimit {
-		return []map[string]interface{}{}, true
+		return []map[string]any{}, true
 	}
-	messages := []map[string]interface{}{}
+	messages := []map[string]any{}
 	if system, ok := parsed.SystemValue(); ok && system != nil {
-		messages = append(messages, map[string]interface{}{"role": "system", "content": system})
+		messages = append(messages, map[string]any{"role": "system", "content": system})
 	}
-	var input []map[string]interface{}
+	var input []map[string]any
 	if err := parsed.DecodeMessages(&input); err != nil {
 		return messages, true
 	}
 	for _, message := range input {
-		messages = append(messages, map[string]interface{}{"role": message["role"], "content": message["content"]})
+		messages = append(messages, map[string]any{"role": message["role"], "content": message["content"]})
 	}
 	return messages, false
 }
 
 type llmStreamBlock struct {
-	content map[string]interface{}
+	content map[string]any
 	deltas  map[string]*strings.Builder
 }
 
 // Messages endpoints use Anthropic JSON/SSE even when routed to another provider.
 // Reconstruct message content, including tool inputs and thinking, from complete
 // SSE lines. Incomplete data beyond the capture bound is explicitly marked above.
-func llmResponseMessages(body []byte, contentType string) ([]map[string]interface{}, bool) {
+func llmResponseMessages(body []byte, contentType string) ([]map[string]any, bool) {
 	if !strings.Contains(contentType, "text/event-stream") {
-		var message map[string]interface{}
+		var message map[string]any
 		if json.Unmarshal(body, &message) != nil {
 			return nil, false
 		}
@@ -158,7 +158,7 @@ func llmResponseMessages(body []byte, contentType string) ([]map[string]interfac
 			return nil, true
 		}
 		if content, ok := message["content"]; ok {
-			return []map[string]interface{}{{"role": "assistant", "content": content}}, false
+			return []map[string]any{{"role": "assistant", "content": content}}, false
 		}
 		return nil, false
 	}
@@ -170,12 +170,12 @@ func llmResponseMessages(body []byte, contentType string) ([]map[string]interfac
 			continue
 		}
 		var event struct {
-			Type    string                 `json:"type"`
-			Index   int                    `json:"index"`
-			Block   map[string]interface{} `json:"content_block"`
-			Delta   map[string]interface{} `json:"delta"`
+			Type    string         `json:"type"`
+			Index   int            `json:"index"`
+			Block   map[string]any `json:"content_block"`
+			Delta   map[string]any `json:"delta"`
 			Message struct {
-				Content []map[string]interface{} `json:"content"`
+				Content []map[string]any `json:"content"`
 			} `json:"message"`
 		}
 		if json.Unmarshal(bytes.TrimSpace(line[5:]), &event) != nil {
@@ -203,11 +203,11 @@ func llmResponseMessages(body []byte, contentType string) ([]map[string]interfac
 					if builder == nil {
 						builder = &strings.Builder{}
 						if initial, ok := block.content[key].(string); ok {
-							builder.WriteString(initial)
+							_, _ = builder.WriteString(initial)
 						}
 						block.deltas[key] = builder
 					}
-					builder.WriteString(value)
+					_, _ = builder.WriteString(value)
 				}
 			}
 		}
@@ -220,12 +220,12 @@ func llmResponseMessages(body []byte, contentType string) ([]map[string]interfac
 		indices = append(indices, index)
 	}
 	sort.Ints(indices)
-	content := make([]map[string]interface{}, 0, len(indices))
+	content := make([]map[string]any, 0, len(indices))
 	for _, index := range indices {
 		block := blocks[index]
 		for key, builder := range block.deltas {
 			if key == "partial_json" {
-				var input interface{}
+				var input any
 				if json.Unmarshal([]byte(builder.String()), &input) == nil {
 					block.content["input"] = input
 				}
@@ -235,5 +235,5 @@ func llmResponseMessages(body []byte, contentType string) ([]map[string]interfac
 		}
 		content = append(content, block.content)
 	}
-	return []map[string]interface{}{{"role": "assistant", "content": content}}, streamError
+	return []map[string]any{{"role": "assistant", "content": content}}, streamError
 }
