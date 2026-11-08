@@ -6,7 +6,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
@@ -28,7 +30,7 @@ func NewLLMLogClient(cfg config.LLMLoggingConfig) *LLMLogClient {
 	}
 
 	return &LLMLogClient{
-		baseURL:   cfg.URL,
+		baseURL:   strings.TrimRight(cfg.URL, "/"),
 		agentName: cfg.AgentName,
 		apiKey:    cfg.APIKey, // [OXSCI] Store API Key
 		httpClient: &http.Client{
@@ -94,7 +96,7 @@ func (c *LLMLogClient) CreateLLMCall(ctx context.Context, req *LLMCallCreateRequ
 	}
 
 	var result LLMCallCreateResponse
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&result); err != nil {
 		return nil, fmt.Errorf("decode response: %w", err)
 	}
 
