@@ -61,8 +61,8 @@ type GatewayHandler struct {
 	maxAccountSwitchesGemini   int
 	cfg                        *config.Config
 	settingService             *service.SettingService
-	lifecycleHook RequestLifecycleHook // [OXSCI] 请求生命周期钩子（扩展点）
-	pricingService *service.PricingService
+	lifecycleHook              RequestLifecycleHook // [OXSCI] 请求生命周期钩子（扩展点）
+	pricingService             *service.PricingService
 }
 
 // NewGatewayHandler creates a new GatewayHandler
@@ -112,8 +112,8 @@ func NewGatewayHandler(
 		hooks = append(hooks, NewLLMLoggingHook(llmLogClient, true))
 	}
 
-	// 使用CompositeHook组合，或使用NoOpHook作为默认
-	var lifecycleHook RequestLifecycleHook = &NoOpHook{}
+	// Disabled logging leaves the hook nil so the request path does not capture bodies.
+	var lifecycleHook RequestLifecycleHook
 	if len(hooks) > 0 {
 		lifecycleHook = NewCompositeHook(hooks...)
 	}
@@ -331,6 +331,11 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 		platform = resolvedPlatform
 	} else if apiKey.Group != nil {
 		platform = apiKey.Group.Platform
+	}
+	// [OXSCI] Capture the client-visible response without delaying streaming.
+	lifecycle := h.beginRequestLifecycle(c, parsedReq, platform, apiKey)
+	if lifecycle != nil {
+		defer lifecycle.finish(c)
 	}
 	sessionKey := sessionHash
 	if platform == service.PlatformGemini && sessionHash != "" {
@@ -746,6 +751,10 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 			}
 			account := selection.Account
 			setOpsSelectedAccount(c, account.ID, account.Platform)
+			if lifecycle != nil {
+				lifecycle.account = account
+				lifecycle.result, lifecycle.forwardErr = nil, nil
+			}
 
 			// [DEBUG-STICKY] 打印账号选择结果
 			reqLog.Info("sticky.account_selected",
@@ -941,6 +950,10 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 				result, err = h.antigravityGatewayService.Forward(requestCtx, c, account, attemptBody, hasBoundSession)
 			} else {
 				result, err = h.gatewayService.Forward(requestCtx, c, account, attemptParsedReq)
+			}
+
+			if lifecycle != nil {
+				lifecycle.recordForwardResult(result, err)
 			}
 
 			// 兜底释放串行锁（正常情况已通过回调提前释放）

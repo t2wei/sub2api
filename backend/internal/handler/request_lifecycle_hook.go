@@ -3,7 +3,6 @@ package handler
 import (
 	"context"
 
-	"github.com/Wei-Shaw/sub2api/ent"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 )
 
@@ -23,26 +22,31 @@ type RequestLifecycleHook interface {
 
 // RequestStartEvent 请求开始事件
 type RequestStartEvent struct {
-	Body     interface{} // 请求体（可能是 *service.ParsedRequest 或其他类型）
-	Platform string      // 平台名称
-	APIKey   *ent.APIKey // API Key
-	User     *ent.User   // 用户信息
+	Body     interface{}     // 请求体（可能是 *service.ParsedRequest 或其他类型）
+	Platform string          // 平台名称
+	APIKey   *service.APIKey // API Key
+	User     *service.User   // 用户信息
 }
 
 // RequestSuccessEvent 请求成功事件
 type RequestSuccessEvent struct {
-	Result  *service.ForwardResult // 转发结果
-	Account *ent.Account           // 使用的账号
-	APIKey  *ent.APIKey            // API Key
-	User    *ent.User              // 用户信息
+	Result            *service.ForwardResult // 转发结果
+	ResponseMessages  []map[string]interface{}
+	ResponseTruncated bool
+	Account           *service.Account // 使用的账号
+	APIKey            *service.APIKey  // API Key
+	User              *service.User    // 用户信息
 }
 
 // RequestErrorEvent 请求失败事件
 type RequestErrorEvent struct {
-	Error   error        // 错误信息
-	Account *ent.Account // 使用的账号（可能为 nil）
-	APIKey  *ent.APIKey  // API Key
-	User    *ent.User    // 用户信息
+	Error             error // 错误信息
+	Result            *service.ForwardResult
+	ResponseMessages  []map[string]interface{}
+	ResponseTruncated bool
+	Account           *service.Account // 使用的账号（可能为 nil）
+	APIKey            *service.APIKey  // API Key
+	User              *service.User    // 用户信息
 }
 
 // NoOpHook 是一个空操作的 Hook 实现（默认实现）
