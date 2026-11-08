@@ -46,20 +46,20 @@ func (c *LLMLogClient) GetAgentName() string {
 
 // LLMCallCreateRequest represents the request to create an LLM call log.
 type LLMCallCreateRequest struct {
-	ContextID *string                  `json:"context_id,omitempty"`
-	AgentName string                   `json:"agent_name"`
-	Model     string                   `json:"model"`
-	Messages  []map[string]interface{} `json:"messages"`
-	Status    string                   `json:"status"`
-	Meta      map[string]interface{}   `json:"meta,omitempty"`
+	ContextID *string          `json:"context_id,omitempty"`
+	AgentName string           `json:"agent_name"`
+	Model     string           `json:"model"`
+	Messages  []map[string]any `json:"messages"`
+	Status    string           `json:"status"`
+	Meta      map[string]any   `json:"meta,omitempty"`
 }
 
 // LLMCallUpdateRequest represents the request to update an LLM call log.
 type LLMCallUpdateRequest struct {
-	ResponseMessages []map[string]interface{} `json:"response_messages,omitempty"`
-	Status           string                   `json:"status"`
-	ErrorMessage     *string                  `json:"error_message,omitempty"`
-	Meta             map[string]interface{}   `json:"meta,omitempty"`
+	ResponseMessages []map[string]any `json:"response_messages,omitempty"`
+	Status           string           `json:"status"`
+	ErrorMessage     *string          `json:"error_message,omitempty"`
+	Meta             map[string]any   `json:"meta,omitempty"`
 }
 
 // LLMCallCreateResponse represents the response from creating an LLM call log.
@@ -89,7 +89,7 @@ func (c *LLMLogClient) CreateLLMCall(ctx context.Context, req *LLMCallCreateRequ
 	if err != nil {
 		return nil, fmt.Errorf("do request: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
 		return nil, fmt.Errorf("unexpected status code: %d", resp.StatusCode)
@@ -126,7 +126,7 @@ func (c *LLMLogClient) UpdateLLMCall(ctx context.Context, id int64, req *LLMCall
 	if err != nil {
 		return fmt.Errorf("do request: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
 		return fmt.Errorf("unexpected status code: %d", resp.StatusCode)

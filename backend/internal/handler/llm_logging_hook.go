@@ -29,7 +29,7 @@ type llmLoggingContext struct {
 	startTime time.Time
 }
 
-func (h *LLMLoggingHook) OnRequestStart(_ context.Context, req *RequestStartEvent) interface{} {
+func (h *LLMLoggingHook) OnRequestStart(_ context.Context, req *RequestStartEvent) any {
 	if !h.llmLoggingEnabled || h.llmLogClient == nil || req == nil || req.Platform == service.PlatformGemini {
 		return nil
 	}
@@ -38,7 +38,7 @@ func (h *LLMLoggingHook) OnRequestStart(_ context.Context, req *RequestStartEven
 		return nil
 	}
 	messages, truncated := llmRequestMessages(parsedReq)
-	meta := map[string]interface{}{"request_truncated": truncated}
+	meta := map[string]any{"request_truncated": truncated}
 	if req.User != nil {
 		meta["user_id"] = req.User.ID
 	}
@@ -54,7 +54,7 @@ func (h *LLMLoggingHook) OnRequestStart(_ context.Context, req *RequestStartEven
 	}
 }
 
-func (h *LLMLoggingHook) OnRequestSuccess(_ context.Context, requestCtx interface{}, event *RequestSuccessEvent) {
+func (h *LLMLoggingHook) OnRequestSuccess(_ context.Context, requestCtx any, event *RequestSuccessEvent) {
 	if event == nil {
 		return
 	}
@@ -65,7 +65,7 @@ func (h *LLMLoggingHook) OnRequestSuccess(_ context.Context, requestCtx interfac
 	h.deliver(requestCtx, req)
 }
 
-func (h *LLMLoggingHook) OnRequestError(_ context.Context, requestCtx interface{}, event *RequestErrorEvent) {
+func (h *LLMLoggingHook) OnRequestError(_ context.Context, requestCtx any, event *RequestErrorEvent) {
 	if event == nil {
 		return
 	}
@@ -79,8 +79,8 @@ func (h *LLMLoggingHook) OnRequestError(_ context.Context, requestCtx interface{
 	h.deliver(requestCtx, req)
 }
 
-func llmResultMeta(result *service.ForwardResult, account *service.Account, apiKey *service.APIKey, user *service.User, truncated bool) map[string]interface{} {
-	meta := map[string]interface{}{"response_truncated": truncated}
+func llmResultMeta(result *service.ForwardResult, account *service.Account, apiKey *service.APIKey, user *service.User, truncated bool) map[string]any {
+	meta := map[string]any{"response_truncated": truncated}
 	if account != nil {
 		meta["account_id"] = account.ID
 	}
@@ -99,7 +99,7 @@ func llmResultMeta(result *service.ForwardResult, account *service.Account, apiK
 	return meta
 }
 
-func (h *LLMLoggingHook) deliver(requestCtx interface{}, update *client.LLMCallUpdateRequest) {
+func (h *LLMLoggingHook) deliver(requestCtx any, update *client.LLMCallUpdateRequest) {
 	llmCtx, ok := requestCtx.(*llmLoggingContext)
 	if !h.llmLoggingEnabled || h.llmLogClient == nil || !ok || llmCtx == nil {
 		return
