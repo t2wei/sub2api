@@ -1218,7 +1218,7 @@
       <div v-if="(form.platform === 'gemini' || form.platform === 'anthropic') && accountCategory === 'service_account'" class="space-y-4">
         <div v-if="form.platform === 'gemini'">
           <label class="input-label">{{ t('admin.accounts.vertexAuthMode') }}</label>
-          <div class="mt-2 flex flex-wrap gap-4">
+          <div class="mt-2 flex gap-4">
             <label class="flex cursor-pointer items-center">
               <input
                 v-model="vertexAuthMode"
@@ -2036,7 +2036,7 @@
         <!-- Auth Mode Radio -->
         <div>
           <label class="input-label">{{ t('admin.accounts.bedrockAuthMode') }}</label>
-          <div class="mt-2 flex gap-4">
+          <div class="mt-2 flex flex-wrap gap-4">
             <label class="flex cursor-pointer items-center">
               <input
                 v-model="bedrockAuthMode"
