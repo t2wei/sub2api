@@ -1218,7 +1218,7 @@
       <div v-if="(form.platform === 'gemini' || form.platform === 'anthropic') && accountCategory === 'service_account'" class="space-y-4">
         <div v-if="form.platform === 'gemini'">
           <label class="input-label">{{ t('admin.accounts.vertexAuthMode') }}</label>
-          <div class="mt-2 flex gap-4">
+          <div class="mt-2 flex flex-wrap gap-4">
             <label class="flex cursor-pointer items-center">
               <input
                 v-model="vertexAuthMode"
@@ -2055,7 +2055,22 @@
               />
               <span class="text-sm text-gray-700 dark:text-gray-300">{{ t('admin.accounts.bedrockAuthModeApikey') }}</span>
             </label>
+            <label class="flex cursor-pointer items-center">
+              <input
+                v-model="bedrockAuthMode"
+                type="radio"
+                value="iam_role"
+                class="mr-2 text-primary-600 focus:ring-primary-500"
+              />
+              <span class="text-sm text-gray-700 dark:text-gray-300">{{ t('admin.accounts.bedrockAuthModeRole') }}</span>
+            </label>
           </div>
+        </div>
+
+        <div v-if="bedrockAuthMode === 'iam_role'">
+          <label class="input-label">{{ t('admin.accounts.bedrockRoleArn') }}</label>
+          <input v-model="bedrockRoleArn" type="text" required class="input font-mono" placeholder="arn:aws:iam::123456789012:role/bedrock" />
+          <p class="input-hint">{{ t('admin.accounts.bedrockRoleHint') }}</p>
         </div>
 
         <!-- SigV4 fields -->
@@ -4773,7 +4788,8 @@ const antigravityPresetMappings = computed(() => getPresetMappingsByPlatform('an
 const bedrockPresets = computed(() => getPresetMappingsByPlatform('bedrock'))
 
 // Bedrock credentials
-const bedrockAuthMode = ref<'sigv4' | 'apikey'>('sigv4')
+const bedrockRoleArn = ref('')
+const bedrockAuthMode = ref<'sigv4' | 'apikey' | 'iam_role'>('sigv4')
 const bedrockAccessKeyId = ref('')
 const bedrockSecretAccessKey = ref('')
 const bedrockSessionToken = ref('')
@@ -5212,6 +5228,7 @@ watch(
     bedrockRegion.value = 'us-east-1'
     bedrockForceGlobal.value = false
     bedrockAuthMode.value = 'sigv4'
+    bedrockRoleArn.value = ''
     bedrockApiKeyValue.value = ''
     vertexServiceAccountJson.value = ''
     vertexProjectId.value = ''
@@ -5985,7 +6002,13 @@ const handleSubmit = async () => {
       aws_region: bedrockRegion.value.trim() || 'us-east-1',
     }
 
-    if (bedrockAuthMode.value === 'sigv4') {
+    if (bedrockAuthMode.value === 'iam_role') {
+      if (!bedrockRoleArn.value.trim()) {
+        appStore.showError(t('admin.accounts.bedrockRoleArnRequired'))
+        return
+      }
+      credentials.aws_role_arn = bedrockRoleArn.value.trim()
+    } else if (bedrockAuthMode.value === 'sigv4') {
       if (!bedrockAccessKeyId.value.trim()) {
         appStore.showError(t('admin.accounts.bedrockAccessKeyIdRequired'))
         return

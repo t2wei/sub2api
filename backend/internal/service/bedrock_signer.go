@@ -6,15 +6,21 @@ import (
 	"encoding/hex"
 	"fmt"
 	"net/http"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	v4 "github.com/aws/aws-sdk-go-v2/aws/signer/v4"
+	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/credentials/stscreds"
+	"github.com/aws/aws-sdk-go-v2/service/sts"
 )
 
 // BedrockSigner 使用 AWS SigV4 对 Bedrock 请求签名
 type BedrockSigner struct {
 	credentials aws.Credentials
+	provider    aws.CredentialsProvider
 	region      string
 	signer      *v4.Signer
 }
@@ -34,6 +40,45 @@ func NewBedrockSigner(accessKeyID, secretAccessKey, sessionToken, region string)
 
 // NewBedrockSignerFromAccount 从 Account 凭证创建 BedrockSigner
 func NewBedrockSignerFromAccount(account *Account) (*BedrockSigner, error) {
+	return newBedrockSignerFromAccount(context.Background(), account)
+}
+
+// Cache providers across requests so concurrent calls share STS sessions and renewal.
+var bedrockRoleProviders sync.Map
+
+type bedrockRoleProviderKey struct {
+	roleARN    string
+	region     string
+	externalID string
+}
+
+func newBedrockSignerFromAccount(ctx context.Context, account *Account) (*BedrockSigner, error) {
+	if account.GetCredential("auth_mode") == "iam_role" {
+		roleARN := strings.TrimSpace(account.GetCredential("aws_role_arn"))
+		if roleARN == "" {
+			return nil, fmt.Errorf("aws_role_arn is required for IAM role authentication")
+		}
+		region := bedrockRuntimeRegion(account)
+		key := bedrockRoleProviderKey{roleARN, region, account.GetCredential("aws_external_id")}
+		cached, ok := bedrockRoleProviders.Load(key)
+		if !ok {
+			cfg, err := config.LoadDefaultConfig(ctx, config.WithRegion(region))
+			if err != nil {
+				return nil, fmt.Errorf("load Bedrock source credentials: %w", err)
+			}
+			provider := aws.NewCredentialsCache(stscreds.NewAssumeRoleProvider(sts.NewFromConfig(cfg), roleARN, func(o *stscreds.AssumeRoleOptions) {
+				o.RoleSessionName = "sub2api-bedrock"
+				o.Duration = time.Hour
+				if key.externalID != "" {
+					o.ExternalID = aws.String(key.externalID)
+				}
+			}), func(o *aws.CredentialsCacheOptions) {
+				o.ExpiryWindow = 5 * time.Minute
+			})
+			cached, _ = bedrockRoleProviders.LoadOrStore(key, provider)
+		}
+		return &BedrockSigner{provider: cached.(aws.CredentialsProvider), region: region, signer: v4.NewSigner()}, nil
+	}
 	accessKeyID := account.GetCredential("aws_access_key_id")
 	if accessKeyID == "" {
 		return nil, fmt.Errorf("aws_access_key_id not found in credentials")
@@ -58,7 +103,15 @@ func NewBedrockSignerFromAccount(account *Account) (*BedrockSigner, error) {
 // 当前实现中 buildUpstreamRequestBedrock 仅设置了 Content-Type 和 Accept，因此是安全的。
 func (s *BedrockSigner) SignRequest(ctx context.Context, req *http.Request, body []byte) error {
 	payloadHash := sha256Hash(body)
-	return s.signer.SignHTTP(ctx, s.credentials, req, payloadHash, "bedrock", s.region, time.Now())
+	credentials := s.credentials
+	if s.provider != nil {
+		var err error
+		credentials, err = s.provider.Retrieve(ctx)
+		if err != nil {
+			return fmt.Errorf("retrieve Bedrock role credentials: %w", err)
+		}
+	}
+	return s.signer.SignHTTP(ctx, credentials, req, payloadHash, "bedrock", s.region, time.Now())
 }
 
 func sha256Hash(data []byte) string {

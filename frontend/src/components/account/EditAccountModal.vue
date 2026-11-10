@@ -1347,7 +1347,7 @@
       <!-- Bedrock fields (for bedrock type, both SigV4 and API Key modes) -->
       <div v-if="account.type === 'bedrock'" class="space-y-4">
         <!-- SigV4 fields -->
-        <template v-if="!isBedrockAPIKeyMode">
+        <template v-if="!isBedrockAPIKeyMode && !isBedrockIAMRoleMode">
           <div>
             <label class="input-label">{{ t('admin.accounts.bedrockAccessKeyId') }}</label>
             <input
@@ -1389,6 +1389,12 @@
             :placeholder="t('admin.accounts.bedrockApiKeyLeaveEmpty')"
           />
           <p class="input-hint">{{ t('admin.accounts.bedrockApiKeyLeaveEmpty') }}</p>
+        </div>
+
+        <div v-if="isBedrockIAMRoleMode">
+          <label class="input-label">{{ t('admin.accounts.bedrockRoleArn') }}</label>
+          <input v-model="editBedrockRoleArn" type="text" required class="input font-mono" />
+          <p class="input-hint">{{ t('admin.accounts.bedrockRoleHint') }}</p>
         </div>
 
         <!-- Shared: Region -->
@@ -3819,6 +3825,8 @@ function onCnPresetSelect(preset: { mode: CnAccountMode; protocol: CnApiProtocol
   editBaseUrl.value = preset.url
 }
 // Bedrock credentials
+const editBedrockRoleArn = ref('')
+const isBedrockIAMRoleMode = computed(() => props.account?.type === 'bedrock' && (props.account?.credentials as Record<string, unknown>)?.auth_mode === 'iam_role')
 const editBedrockAccessKeyId = ref('')
 const editBedrockSecretAccessKey = ref('')
 const editBedrockSessionToken = ref('')
@@ -4971,6 +4979,7 @@ const syncFormFromAccount = (newAccount: Account | null) => {
   } else if (newAccount.type === 'bedrock' && newAccount.credentials) {
     const bedrockCreds = newAccount.credentials as Record<string, unknown>
     const authMode = (bedrockCreds.auth_mode as string) || 'sigv4'
+    editBedrockRoleArn.value = (bedrockCreds.aws_role_arn as string) || ''
     editBedrockRegion.value = (bedrockCreds.aws_region as string) || ''
     editBedrockForceGlobal.value = (bedrockCreds.aws_force_global as string) === 'true'
 
@@ -5916,7 +5925,13 @@ const handleSubmit = async () => {
         delete newCredentials.aws_force_global
       }
 
-      if (isBedrockAPIKeyMode.value) {
+      if (isBedrockIAMRoleMode.value) {
+        if (!editBedrockRoleArn.value.trim()) {
+          appStore.showError(t('admin.accounts.bedrockRoleArnRequired'))
+          return
+        }
+        newCredentials.aws_role_arn = editBedrockRoleArn.value.trim()
+      } else if (isBedrockAPIKeyMode.value) {
         // API Key mode: only update api_key if user provided new value
         if (editBedrockApiKeyValue.value.trim()) {
           newCredentials.api_key = editBedrockApiKeyValue.value.trim()

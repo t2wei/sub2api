@@ -110,7 +110,7 @@ func (s *GatewayService) forwardBedrock(
 			return nil, fmt.Errorf("api_key not found in bedrock credentials")
 		}
 	} else {
-		signer, err = NewBedrockSignerFromAccount(account)
+		signer, err = newBedrockSignerFromAccount(ctx, account)
 		if err != nil {
 			return nil, fmt.Errorf("create bedrock signer: %w", err)
 		}
