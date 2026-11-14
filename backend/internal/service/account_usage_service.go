@@ -69,6 +69,8 @@ type UsageLogRepository interface {
 	ListWithFilters(ctx context.Context, params pagination.PaginationParams, filters usagestats.UsageLogFilters) ([]UsageLog, *pagination.PaginationResult, error)
 	GetGlobalStats(ctx context.Context, startTime, endTime time.Time) (*usagestats.UsageStats, error)
 	GetStatsWithFilters(ctx context.Context, filters usagestats.UsageLogFilters) (*usagestats.UsageStats, error)
+	// GetSessionTotals aggregates usage by (day, user, API key, group, client session id).
+	GetSessionTotals(ctx context.Context, q usagestats.SessionTotalsQuery) (*usagestats.SessionTotalsPage, error)
 
 	// Account stats
 	GetAccountUsageStats(ctx context.Context, accountID int64, startTime, endTime time.Time) (*usagestats.AccountUsageStatsResponse, error)

@@ -106,6 +106,17 @@ func TestExtractClientSessionID_HeaderPrecedence(t *testing.T) {
 	require.Equal(t, "primary", ExtractClientSessionID(c))
 }
 
+// A gateway in front of Claude Code (OxSci P135 U2) labels usage by sending
+// session_id while the CLI keeps sending X-Claude-Code-Session-Id: the explicit
+// session_id is what usage_logs.session_id records.
+func TestExtractClientSessionID_SessionIDBeatsClaudeCodeHeader(t *testing.T) {
+	c := newSessionHeaderContext(t, map[string]string{
+		claudeCodeSessionHeader: "cc-session",
+		"session_id":            "xsci-cloud:owner:route",
+	})
+	require.Equal(t, "xsci-cloud:owner:route", ExtractClientSessionID(c))
+}
+
 func TestExtractClientSessionID_Sanitizes(t *testing.T) {
 	c := newSessionHeaderContext(t, map[string]string{openCodeSessionIDHeader: "  clean-123  "})
 	require.Equal(t, "clean-123", ExtractClientSessionID(c))

@@ -2736,6 +2736,10 @@ func (r *stubUsageLogRepo) GetDailyStatsAggregated(ctx context.Context, userID i
 	return nil, errors.New("not implemented")
 }
 
+func (r *stubUsageLogRepo) GetSessionTotals(ctx context.Context, q usagestats.SessionTotalsQuery) (*usagestats.SessionTotalsPage, error) {
+	return nil, errors.New("not implemented")
+}
+
 func (r *stubUsageLogRepo) GetBatchUserUsageStats(ctx context.Context, userIDs []int64, startTime, endTime time.Time) (map[int64]*usagestats.BatchUserUsageStats, error) {
 	return nil, errors.New("not implemented")
 }
