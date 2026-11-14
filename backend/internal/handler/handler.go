@@ -69,6 +69,8 @@ type Handlers struct {
 	ModelPlaza       *ModelPlazaHandler
 	AsyncImage       *AsyncImageHandler
 	BatchImage       *BatchImageHandler
+	// Issuer [OXSCI] the data service's narrow issuance API (P135 T13 K1).
+	Issuer *IssuerHandler
 }
 
 // BuildInfo contains build-time information

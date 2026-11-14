@@ -110,6 +110,9 @@ type Config struct {
 	ImageStorage            ImageStorageConfig            `mapstructure:"image_storage"`
 	Plugins                 PluginConfig                  `mapstructure:"plugins"`
 	LLMLogging              LLMLoggingConfig              `mapstructure:"llm_logging"` // [OXSCI] LLM 调用日志配置
+	// Issuer [OXSCI] the data service's narrow issuance API (P135 T13 K1). Read from
+	// three fixed environment variables only (issuer_oxsci.go), never from the config file.
+	Issuer IssuerConfig `mapstructure:"-"`
 
 	// Enforce only API-key spending windows in simple mode.
 	SimpleModeKeyRateLimitEnabled bool `mapstructure:"simple_mode_key_rate_limit_enabled" yaml:"simple_mode_key_rate_limit_enabled"`
@@ -2019,6 +2022,12 @@ func load(allowMissingJWTSecret bool) (*Config, error) {
 	cfg.Log.Environment = strings.TrimSpace(cfg.Log.Environment)
 	cfg.Log.StacktraceLevel = strings.ToLower(strings.TrimSpace(cfg.Log.StacktraceLevel))
 	cfg.Log.Output.FilePath = strings.TrimSpace(cfg.Log.Output.FilePath)
+	cfg.Issuer = LoadIssuerConfig(os.Getenv)
+	if cfg.Issuer.Misconfigured {
+		slog.Error("issuer API disabled", "reason", cfg.Issuer.DisabledReason)
+	} else if cfg.Issuer.Enabled() {
+		slog.Info("issuer API enabled", "email_domain", cfg.Issuer.EmailDomain, "groups", len(cfg.Issuer.GroupIDs))
+	}
 	cfg.LLMLogging.URL = strings.TrimSpace(cfg.LLMLogging.URL)
 	cfg.LLMLogging.AgentName = strings.TrimSpace(cfg.LLMLogging.AgentName)
 	cfg.LLMLogging.APIKey = strings.TrimSpace(cfg.LLMLogging.APIKey)

@@ -389,6 +389,71 @@ func TestOIDCOAuthCallbackRejectsMissingOrgClaimBeforePendingSession(t *testing.
 	require.Zero(t, pendingCount)
 }
 
+func TestOIDCOAuthCallbackRejectsCandidateBeforePendingSession(t *testing.T) {
+	cfg, cleanup := newOIDCTestProvider(t, oidcProviderFixture{
+		Subject:           "oidc-subject-candidate",
+		PreferredUsername: "oidc_candidate",
+		DisplayName:       "OIDC Candidate",
+		Email:             "candidate@example.com",
+		EmailVerified:     true,
+		InOxSciOrg:        boolPtr(true),
+		MemberKind:        "candidate",
+	})
+	defer cleanup()
+
+	handler, client := newOIDCOAuthHandlerAndClientWithSettings(t, false, cfg, nil)
+	t.Cleanup(func() { _ = client.Close() })
+
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/oauth/oidc/callback?code=oidc-code&state=state-candidate", nil)
+	req.AddCookie(encodedCookie(oidcOAuthStateCookieName, "state-candidate"))
+	req.AddCookie(encodedCookie(oidcOAuthRedirectCookie, "/dashboard"))
+	req.AddCookie(encodedCookie(oidcOAuthVerifierCookie, "verifier-candidate"))
+	req.AddCookie(encodedCookie(oidcOAuthNonceCookie, "nonce-oidc-subject-candidate"))
+	req.AddCookie(encodedCookie(oidcOAuthIntentCookieName, oauthIntentLogin))
+	req.AddCookie(encodedCookie(oauthPendingBrowserCookieName, "browser-candidate"))
+	c.Request = req
+
+	handler.OIDCOAuthCallback(c)
+
+	require.Equal(t, http.StatusFound, recorder.Code)
+	assertOAuthRedirectError(t, recorder.Header().Get("Location"), "candidate_not_allowed", "candidate accounts cannot sign in to token.xsci.ai")
+	require.Nil(t, findCookie(recorder.Result().Cookies(), oauthPendingSessionCookieName))
+
+	ctx := context.Background()
+	userCount, err := client.User.Query().Where(dbuser.EmailEQ("candidate@example.com")).Count(ctx)
+	require.NoError(t, err)
+	require.Zero(t, userCount)
+	identityCount, err := client.AuthIdentity.Query().
+		Where(authidentity.ProviderSubjectEQ("oidc-subject-candidate")).
+		Count(ctx)
+	require.NoError(t, err)
+	require.Zero(t, identityCount)
+	pendingCount, err := client.PendingAuthSession.Query().Count(ctx)
+	require.NoError(t, err)
+	require.Zero(t, pendingCount)
+}
+
+func TestOIDCParseUserInfoMemberKind(t *testing.T) {
+	cfg := config.OIDCConnectConfig{}
+	for _, tc := range []struct {
+		body      string
+		candidate bool
+	}{
+		{`{"sub":"a","in_oxsci_org":true,"member_kind":"candidate"}`, true},
+		{`{"sub":"a","in_oxsci_org":true,"member_kind":"Candidate"}`, true},
+		{`{"sub":"a","in_oxsci_org":true,"member_kind":"staff"}`, false},
+		{`{"sub":"a","in_oxsci_org":true,"member_kind":"collaborator"}`, false},
+		{`{"sub":"a","in_oxsci_org":true}`, false},
+		{`{"sub":"a","in_oxsci_org":true,"member_kind":null}`, false},
+	} {
+		claims := oidcParseUserInfo(tc.body, cfg)
+		require.Equal(t, tc.candidate, oidcIsInterviewCandidate(claims), tc.body)
+	}
+	require.False(t, oidcIsInterviewCandidate(nil))
+}
+
 func TestOIDCOAuthCallbackRejectsDisabledExistingIdentityUser(t *testing.T) {
 	cfg, cleanup := newOIDCTestProvider(t, oidcProviderFixture{
 		Subject:           "oidc-disabled-subject",
@@ -1550,6 +1615,7 @@ type oidcProviderFixture struct {
 	Email             string
 	EmailVerified     bool
 	InOxSciOrg        *bool
+	MemberKind        string
 }
 
 func newOIDCOAuthTestHandler(t *testing.T, invitationEnabled bool, oauthCfg config.OIDCConnectConfig) *AuthHandler {
@@ -1641,6 +1707,9 @@ func newOIDCTestProvider(t *testing.T, fixture oidcProviderFixture) (config.OIDC
 	}
 	if fixture.InOxSciOrg != nil {
 		userInfoPayload["in_oxsci_org"] = *fixture.InOxSciOrg
+	}
+	if fixture.MemberKind != "" {
+		userInfoPayload["member_kind"] = fixture.MemberKind
 	}
 
 	var issuer string

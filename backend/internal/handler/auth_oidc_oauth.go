@@ -92,8 +92,11 @@ type oidcUserInfoClaims struct {
 	Subject       string
 	EmailVerified *bool
 	InOxSciOrg    *bool
-	DisplayName   string
-	AvatarURL     string
+	// MemberKind is the issuer's admission kind (staff / collaborator / candidate),
+	// carried next to in_oxsci_org from the same admitting row. Empty when absent.
+	MemberKind  string
+	DisplayName string
+	AvatarURL   string
 }
 
 type oidcJWKSet struct {
@@ -424,6 +427,11 @@ func (h *AuthHandler) OIDCOAuthCallback(c *gin.Context) {
 			log.Printf("[OIDC OAuth] rejected login because userinfo.in_oxsci_org is false: issuer=%q subject=%q email=%q", issuer, subject, compatEmail)
 		}
 		redirectOAuthError(c, frontendCallback, "org_not_allowed", "account is not in XSci organization", "userinfo in_oxsci_org must be true")
+		return
+	}
+	if oidcIsInterviewCandidate(userInfoClaims) {
+		log.Printf("[OIDC OAuth] rejected login because userinfo.member_kind is candidate: issuer=%q subject=%q email=%q", issuer, subject, compatEmail)
+		redirectOAuthError(c, frontendCallback, oidcCandidateNotAllowedCode, oidcCandidateNotAllowedMessage, oidcCandidateNotAllowedMessage)
 		return
 	}
 
@@ -995,6 +1003,7 @@ func oidcParseUserInfo(body string, cfg config.OIDCConnectConfig) *oidcUserInfoC
 	if inOrg, ok := getGJSONBool(body, "in_oxsci_org"); ok {
 		claims.InOxSciOrg = &inOrg
 	}
+	claims.MemberKind = strings.TrimSpace(getGJSON(body, "member_kind"))
 	claims.DisplayName = firstNonEmpty(
 		getGJSON(body, "name"),
 		getGJSON(body, "nickname"),
@@ -1304,6 +1313,23 @@ func oidcCanAutoCompleteLogin(email string, emailVerified bool) bool {
 
 func oidcInOxSciOrg(claims *oidcUserInfoClaims) bool {
 	return claims != nil && claims.InOxSciOrg != nil && *claims.InOxSciOrg
+}
+
+const (
+	// oidcMemberKindCandidate is the XSci admission kind of an interview candidate
+	// (P135 T13). A candidate is admitted to reach their own interview project only;
+	// their model calls go through a per-interview account the data service issues,
+	// so they never get a token.xsci.ai login of their own.
+	oidcMemberKindCandidate        = "candidate"
+	oidcCandidateNotAllowedCode    = "candidate_not_allowed"
+	oidcCandidateNotAllowedMessage = "candidate accounts cannot sign in to token.xsci.ai"
+)
+
+// oidcIsInterviewCandidate reports whether userinfo names the account an interview
+// candidate. A missing member_kind is not a refusal here: in_oxsci_org stays the
+// login gate, and member_kind only narrows it.
+func oidcIsInterviewCandidate(claims *oidcUserInfoClaims) bool {
+	return claims != nil && strings.EqualFold(claims.MemberKind, oidcMemberKindCandidate)
 }
 
 func oidcFallbackUsername(subject string) string {
