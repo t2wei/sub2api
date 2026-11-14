@@ -143,7 +143,7 @@ func TestAnthropicPromptTotalCacheReadZeroForwardBoundary(t *testing.T) {
 					} else {
 						var result *streamingResult
 						if route == "raw" {
-							result, err = service.handleStreamingResponseAnthropicAPIKeyPassthrough(context.Background(), response, ctx, &Account{ID: 701}, time.Now(), "claude-sonnet-4")
+							result, err = service.handleStreamingResponseAnthropicAPIKeyPassthrough(context.Background(), response, ctx, &Account{ID: 701}, time.Now(), "claude-sonnet-4", "claude-sonnet-4")
 						} else {
 							result, err = service.handleStreamingResponse(context.Background(), response, ctx, &Account{ID: 701}, time.Now(), "claude-sonnet-4", "claude-sonnet-4", false)
 						}
@@ -232,7 +232,7 @@ func TestAnthropicPromptTotalForwardBoundary(t *testing.T) {
 						if route == "messages" {
 							streamed, err = service.handleStreamingResponse(context.Background(), response, ctx, &Account{ID: 701}, time.Now(), "claude-sonnet-4", "claude-sonnet-4", false)
 						} else {
-							streamed, err = service.handleStreamingResponseAnthropicAPIKeyPassthrough(context.Background(), response, ctx, &Account{ID: 701}, time.Now(), "claude-sonnet-4")
+							streamed, err = service.handleStreamingResponseAnthropicAPIKeyPassthrough(context.Background(), response, ctx, &Account{ID: 701}, time.Now(), "claude-sonnet-4", "claude-sonnet-4")
 						}
 						require.NotNil(t, streamed)
 						result = &ForwardResult{Usage: *streamed.usage}
@@ -333,7 +333,7 @@ func TestAnthropicPromptTotalBufferedMessages(t *testing.T) {
 				case "messages":
 					usage, err = service.handleNonStreamingResponse(context.Background(), response, ctx, account, "claude-sonnet-4", "claude-sonnet-4")
 				case "passthrough":
-					usage, err = service.handleNonStreamingResponseAnthropicAPIKeyPassthrough(context.Background(), response, ctx, account)
+					usage, err = service.handleNonStreamingResponseAnthropicAPIKeyPassthrough(context.Background(), response, ctx, account, "claude-sonnet-4", "claude-sonnet-4")
 				case "native messages":
 					var result *OpenAIForwardResult
 					result, err = (&OpenAIGatewayService{cfg: &config.Config{}}).handleNativeAnthropicBufferedResponse(context.Background(), response, ctx, account, "claude-sonnet-4", "claude-sonnet-4", "claude-sonnet-4", nil, time.Now())

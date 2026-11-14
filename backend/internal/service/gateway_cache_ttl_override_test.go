@@ -150,7 +150,7 @@ func TestCacheTTLOverrideForwardBillingBoundary(t *testing.T) {
 						if route == "standard" {
 							streamed, err = service.handleStreamingResponse(context.Background(), response, ctx, account, time.Now(), "k3", "k3", false)
 						} else {
-							streamed, err = service.handleStreamingResponseAnthropicAPIKeyPassthrough(context.Background(), response, ctx, account, time.Now(), "k3")
+							streamed, err = service.handleStreamingResponseAnthropicAPIKeyPassthrough(context.Background(), response, ctx, account, time.Now(), "k3", "k3")
 						}
 						require.NotNil(t, streamed)
 						result = &ForwardResult{Usage: *streamed.usage}

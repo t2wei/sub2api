@@ -172,7 +172,7 @@ func TestAnthropicCacheCreationMissingDetailForwardBillingBoundary(t *testing.T)
 						if route == "standard" {
 							streamed, err = service.handleStreamingResponse(context.Background(), response, ctx, &Account{ID: 701}, time.Now(), "claude-sonnet-4", "claude-sonnet-4", false)
 						} else {
-							streamed, err = service.handleStreamingResponseAnthropicAPIKeyPassthrough(context.Background(), response, ctx, &Account{ID: 701}, time.Now(), "claude-sonnet-4")
+							streamed, err = service.handleStreamingResponseAnthropicAPIKeyPassthrough(context.Background(), response, ctx, &Account{ID: 701}, time.Now(), "claude-sonnet-4", "claude-sonnet-4")
 							require.Equal(t, payload, recorder.Body.String())
 						}
 						require.NotNil(t, streamed)

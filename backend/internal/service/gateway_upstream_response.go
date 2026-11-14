@@ -1058,10 +1058,12 @@ func (s *GatewayService) handleStreamingResponse(ctx context.Context, resp *http
 			}
 		}
 
-		if needModelReplace {
-			if msg, ok := event["message"].(map[string]any); ok {
-				if model, ok := msg["model"].(string); ok && model == mappedModel {
-					msg["model"] = originalModel
+		// 上游回的是映射名或其别名（如 OpenRouter 的 anthropic/claude-opus-5）时还原成客户端请求的模型名；
+		// 原始上游模型名已由 observer 记录。
+		if msg, ok := event["message"].(map[string]any); ok {
+			if model, ok := msg["model"].(string); ok {
+				if restoredModel, changed := clientFacingAnthropicResponseModel(model, originalModel, mappedModel); changed {
+					msg["model"] = restoredModel
 					eventChanged = true
 				}
 			}
@@ -1561,9 +1563,10 @@ func (s *GatewayService) handleNonStreamingResponse(ctx context.Context, resp *h
 		}
 	}
 
-	// 如果有模型映射，替换响应中的model字段
-	if originalModel != mappedModel {
-		body = s.replaceModelInResponseBody(body, mappedModel, originalModel)
+	// 上游回的是映射名或其别名时，把响应中的 model 字段还原成客户端请求的模型名
+	body, err = restoreClientModelInAnthropicResponseBody(body, originalModel, mappedModel)
+	if err != nil {
+		return nil, err
 	}
 	body = restoreCompositeClientModel(ctx, body)
 
@@ -1582,19 +1585,6 @@ func (s *GatewayService) handleNonStreamingResponse(ctx context.Context, resp *h
 	c.Data(resp.StatusCode, contentType, body)
 
 	return &response.Usage, nil
-}
-
-// replaceModelInResponseBody 替换响应体中的model字段
-// 使用 gjson/sjson 精确替换，避免全量 JSON 反序列化
-func (s *GatewayService) replaceModelInResponseBody(body []byte, fromModel, toModel string) []byte {
-	if m := gjson.GetBytes(body, "model"); m.Exists() && m.Str == fromModel {
-		newBody, err := sjson.SetBytes(body, "model", toModel)
-		if err != nil {
-			return body
-		}
-		return newBody
-	}
-	return body
 }
 
 // reconcileCachedTokens 兼容 Kimi 等上游：
