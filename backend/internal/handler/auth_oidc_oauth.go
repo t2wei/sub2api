@@ -785,7 +785,7 @@ func (h *AuthHandler) completeOIDCOAuthRegistrationSession(
 		return
 	}
 	tokenPair, user, err := h.authService.LoginOrRegisterOAuthWithTokenPairAndPromoCode(
-		c.Request.Context(),
+		oidcSignupContext(c.Request.Context(), session.ProviderType, session.UpstreamIdentityClaims),
 		email,
 		username,
 		req.InvitationCode,
@@ -1393,7 +1393,7 @@ func (h *AuthHandler) tryOIDCVerifiedEmailFastPath(
 		UpstreamMetadata: upstreamMetadata,
 	}
 	tokenPair, _, err := h.authService.LoginOrRegisterVerifiedEmailOAuthWithSignupCodes(
-		ctx,
+		oidcSignupContext(ctx, identity.ProviderType, upstreamClaims),
 		input,
 		"",
 		"",
