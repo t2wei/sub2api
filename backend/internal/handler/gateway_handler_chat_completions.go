@@ -211,6 +211,7 @@ func (h *GatewayHandler) ChatCompletions(c *gin.Context) {
 				cls = classifySelectionFailureError(err, cls)
 				if !cls.ModelNotFound {
 					markOpsRoutingCapacityLimitedIfNoAvailable(c, err)
+					h.setNoAccountRetryAfter(c, apiKey.GroupID, reqModel, groupPlatform)
 				}
 				message := cls.Message
 				if !cls.ModelNotFound {
@@ -243,6 +244,7 @@ func (h *GatewayHandler) ChatCompletions(c *gin.Context) {
 		if !selection.Acquired {
 			if selection.WaitPlan == nil {
 				markOpsRoutingCapacityLimited(c)
+				h.setNoAccountRetryAfter(c, apiKey.GroupID, reqModel, groupPlatform)
 				h.chatCompletionsErrorResponse(c, http.StatusServiceUnavailable, "api_error", "No available accounts")
 				return
 			}
