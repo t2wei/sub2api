@@ -1550,6 +1550,7 @@ type oidcProviderFixture struct {
 	Email             string
 	EmailVerified     bool
 	InOxSciOrg        *bool
+	Groups            []string
 }
 
 func newOIDCOAuthTestHandler(t *testing.T, invitationEnabled bool, oauthCfg config.OIDCConnectConfig) *AuthHandler {
@@ -1641,6 +1642,9 @@ func newOIDCTestProvider(t *testing.T, fixture oidcProviderFixture) (config.OIDC
 	}
 	if fixture.InOxSciOrg != nil {
 		userInfoPayload["in_oxsci_org"] = *fixture.InOxSciOrg
+	}
+	if fixture.Groups != nil {
+		userInfoPayload["groups"] = fixture.Groups
 	}
 
 	var issuer string
