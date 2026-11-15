@@ -92,6 +92,7 @@ type oidcUserInfoClaims struct {
 	Subject       string
 	EmailVerified *bool
 	InOxSciOrg    *bool
+	Groups        []string
 	DisplayName   string
 	AvatarURL     string
 }
@@ -405,6 +406,9 @@ func (h *AuthHandler) OIDCOAuthCallback(c *gin.Context) {
 	}
 	if userInfoClaims.InOxSciOrg != nil {
 		upstreamClaims["in_oxsci_org"] = *userInfoClaims.InOxSciOrg
+	}
+	if userInfoClaims.Groups != nil {
+		upstreamClaims["groups"] = userInfoClaims.Groups
 	}
 	if trustedOrgEmail {
 		upstreamClaims["trusted_org"] = true
@@ -995,6 +999,7 @@ func oidcParseUserInfo(body string, cfg config.OIDCConnectConfig) *oidcUserInfoC
 	if inOrg, ok := getGJSONBool(body, "in_oxsci_org"); ok {
 		claims.InOxSciOrg = &inOrg
 	}
+	claims.Groups = oidcParseGroups(body)
 	claims.DisplayName = firstNonEmpty(
 		getGJSON(body, "name"),
 		getGJSON(body, "nickname"),
