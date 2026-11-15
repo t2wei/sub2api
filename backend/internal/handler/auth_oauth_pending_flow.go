@@ -1859,7 +1859,7 @@ func (h *AuthHandler) createPendingOAuthAccount(c *gin.Context, provider string)
 	}
 
 	if err := h.authService.FinalizeOAuthEmailAccount(
-		txCtx,
+		oidcSignupContext(txCtx, session.ProviderType, session.UpstreamIdentityClaims),
 		user,
 		strings.TrimSpace(req.InvitationCode),
 		strings.TrimSpace(session.ProviderType),
