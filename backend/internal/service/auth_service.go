@@ -905,6 +905,9 @@ func (s *AuthService) assignSubscriptions(ctx context.Context, userID int64, ite
 	if s.settingService == nil || s.defaultSubAssigner == nil || userID <= 0 {
 		return
 	}
+	if signupSubscriptionsWithheld(ctx, userID, items) {
+		return
+	}
 	for _, item := range items {
 		if _, _, err := s.defaultSubAssigner.AssignOrExtendSubscription(ctx, &AssignSubscriptionInput{
 			UserID:       userID,
