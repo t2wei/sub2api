@@ -383,6 +383,7 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 					cls := classifyNoAccountErrorFromGin(c, h.gatewayService, apiKey, reqModel, reqModel, service.PlatformGemini)
 					if !cls.ModelNotFound {
 						markOpsRoutingCapacityLimitedIfNoAvailable(c, err)
+						h.setNoAccountRetryAfter(c, apiKey.GroupID, reqModel, service.PlatformGemini)
 					}
 					reqLog.Warn("gateway.select_account_no_available",
 						zap.String("model", reqModel),
@@ -445,6 +446,7 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 						zap.String("model", reqModel),
 						zap.String("platform", platform),
 					)
+					h.setNoAccountRetryAfter(c, apiKey.GroupID, reqModel, platform)
 					h.handleStreamingAwareError(c, http.StatusServiceUnavailable, "api_error", "No available accounts", streamStarted)
 					return
 				}
@@ -715,6 +717,7 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 					cls := classifyNoAccountErrorFromGin(c, h.gatewayService, currentAPIKey, reqModel, reqModel, platform)
 					if !cls.ModelNotFound {
 						markOpsRoutingCapacityLimitedIfNoAvailable(c, err)
+						h.setNoAccountRetryAfter(c, currentAPIKey.GroupID, reqModel, platform)
 					}
 					reqLog.Warn("gateway.select_account_no_available",
 						zap.String("model", reqModel),
@@ -792,6 +795,7 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 						zap.String("model", reqModel),
 						zap.String("platform", platform),
 					)
+					h.setNoAccountRetryAfter(c, currentAPIKey.GroupID, reqModel, platform)
 					h.handleStreamingAwareError(c, http.StatusServiceUnavailable, "api_error", "No available accounts", streamStarted)
 					return
 				}
@@ -2313,6 +2317,7 @@ func (h *GatewayHandler) CountTokens(c *gin.Context) {
 		cls := classifyNoAccountErrorFromGin(c, h.gatewayService, apiKey, parsedReq.Model, parsedReq.Model, service.PlatformAnthropic)
 		if !cls.ModelNotFound {
 			markOpsRoutingCapacityLimitedIfNoAvailable(c, err)
+			h.setNoAccountRetryAfter(c, apiKey.GroupID, parsedReq.Model, service.PlatformAnthropic)
 		}
 		h.errorResponse(c, cls.Status, cls.ErrType, cls.Message)
 		return
