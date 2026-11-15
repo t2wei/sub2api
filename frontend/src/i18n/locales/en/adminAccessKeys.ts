@@ -214,6 +214,10 @@ export default {
       "label": "Change and reset all user platform quotas",
       "category": "Users"
     },
+    "users_dapi_ukeys_dcreate": {
+      "label": "Create user API keys bound to the selected groups (returns the key)",
+      "category": "Users"
+    },
     "groups_dread": {
       "label": "Read all group configurations",
       "category": "Groups"

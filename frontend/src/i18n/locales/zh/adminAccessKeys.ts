@@ -214,6 +214,10 @@ export default {
       "label": "修改与重置全站用户平台额度",
       "category": "用户"
     },
+    "users_dapi_ukeys_dcreate": {
+      "label": "为用户创建绑定所选分组的 API 密钥（返回密钥明文）",
+      "category": "用户"
+    },
     "groups_dread": {
       "label": "读取所有分组配置",
       "category": "分组"
