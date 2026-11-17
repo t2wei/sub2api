@@ -193,7 +193,8 @@ func BuildBedrockURL(region, modelID string, stream bool) string {
 //  3. 移除 Bedrock 不支持的字段（model, stream, output_format）；Sonnet 5.5 保留 output_config.effort
 //  4. 移除工具定义中的 custom 字段（Claude Code 会发送 custom: {defer_loading: true}）
 //  5. 清理 cache_control 中 Bedrock 不支持的字段（scope, ttl）
-//  6. 修复 thinking 字段兼容性（Opus 4.7 仅支持 adaptive，enabled 需要 budget_tokens）
+//  6. 修复 thinking 字段兼容性（Opus 4.7 仅支持 adaptive，enabled 需要 budget_tokens；
+//     thinking.display 只留 summarized / omitted）
 //  7. 清理 tool_use.id / tool_use_id 中 Bedrock 不接受的字符
 //  8. 根据最终 Bedrock beta tokens 剥离不再支持的 beta 字段
 func PrepareBedrockRequestBody(body []byte, modelID string, betaHeader string) ([]byte, error) {
@@ -272,6 +273,9 @@ func PrepareBedrockRequestBodyWithTokens(body []byte, modelID string, betaTokens
 
 	// 清理 cache_control 中 Bedrock 不支持的字段
 	body = sanitizeBedrockCacheControl(body, modelID)
+
+	// thinking.display 只保留 Bedrock 接受的取值（不分 CC 兼容模式，任何客户端都会撞上）
+	body = sanitizeBedrockThinkingDisplay(body)
 
 	// CC 兼容模式：修复 CC 发送的 Bedrock 不兼容字段
 	if ccCompat {
@@ -728,6 +732,31 @@ func isBedrockFable5(modelID string) bool {
 }
 
 const defaultThinkingBudgetTokens = 10000
+
+// bedrockThinkingDisplayValues 是 Bedrock 接受的 thinking.display 取值。
+// Anthropic 直连 API 还接受 "highlights"（Claude Code 2.1.3xx 起缺省发它），
+// Bedrock 对其余取值一律 400：
+// "thinking.adaptive.display: Input should be 'summarized', 'omitted'"。
+var bedrockThinkingDisplayValues = map[string]bool{
+	"summarized": true,
+	"omitted":    true,
+}
+
+// sanitizeBedrockThinkingDisplay 把 Bedrock 不接受的 thinking.display 改写成 "summarized"。
+// 选 summarized 而不是 omitted：客户端要的是能看到思考内容（highlights 是摘要的一种），
+// summarized 最接近；计费按完整 thinking token，不受影响。
+// 不是字符串的 display 原样留给上游报错，不在这里猜。
+func sanitizeBedrockThinkingDisplay(body []byte) []byte {
+	display := gjson.GetBytes(body, "thinking.display")
+	if !display.Exists() || display.Type != gjson.String {
+		return body
+	}
+	if bedrockThinkingDisplayValues[display.String()] {
+		return body
+	}
+	body, _ = sjson.SetBytes(body, "thinking.display", "summarized")
+	return body
+}
 
 // sanitizeBedrockThinking 修复 thinking 字段的 Bedrock 兼容性问题：
 //   - Sonnet 5.5: enabled 改为 adaptive；disabled 改为 between_tools

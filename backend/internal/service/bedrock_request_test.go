@@ -1,6 +1,7 @@
 package service
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -1185,5 +1186,56 @@ func TestSanitizeBedrockCCBetaTokens(t *testing.T) {
 		assert.Equal(t, 2, len(tokens))
 		assert.Contains(t, []string{tokens[0].String(), tokens[1].String()}, "computer-use-2025-11-24")
 		assert.Contains(t, []string{tokens[0].String(), tokens[1].String()}, "context-1m-2025-08-07")
+	})
+}
+
+func TestPrepareBedrockRequestBody_ThinkingDisplay(t *testing.T) {
+	build := func(thinking string) []byte {
+		return []byte(`{"model":"claude-opus-4-8","max_tokens":1024,"thinking":` + thinking + `,"messages":[{"role":"user","content":"hi"}]}`)
+	}
+	const model = "global.anthropic.claude-opus-4-8"
+
+	cases := []struct {
+		name     string
+		thinking string
+		want     string // "" = display must be absent
+	}{
+		{"highlights becomes summarized", `{"type":"adaptive","display":"highlights"}`, "summarized"},
+		{"unknown value becomes summarized", `{"type":"adaptive","display":"full"}`, "summarized"},
+		{"enabled with highlights becomes summarized", `{"type":"enabled","budget_tokens":2048,"display":"highlights"}`, "summarized"},
+		{"summarized kept", `{"type":"adaptive","display":"summarized"}`, "summarized"},
+		{"omitted kept", `{"type":"adaptive","display":"omitted"}`, "omitted"},
+		{"absent stays absent", `{"type":"adaptive"}`, ""},
+	}
+	for _, tc := range cases {
+		for _, ccCompat := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/ccCompat=%v", tc.name, ccCompat), func(t *testing.T) {
+				result, err := PrepareBedrockRequestBodyWithTokens(build(tc.thinking), model, nil, ccCompat)
+				require.NoError(t, err)
+				display := gjson.GetBytes(result, "thinking.display")
+				if tc.want == "" {
+					assert.False(t, display.Exists())
+					return
+				}
+				assert.Equal(t, tc.want, display.String())
+				if !ccCompat { // ccCompat 另有 thinking.type 的转换（enabled → adaptive），不在这里核
+					assert.Equal(t, gjson.Get(tc.thinking, "type").String(), gjson.GetBytes(result, "thinking.type").String(),
+						"display rewrite must not touch thinking.type")
+				}
+			})
+		}
+	}
+
+	t.Run("non-string display is left for upstream to reject", func(t *testing.T) {
+		result, err := PrepareBedrockRequestBodyWithTokens(build(`{"type":"adaptive","display":1}`), model, nil, false)
+		require.NoError(t, err)
+		assert.Equal(t, int64(1), gjson.GetBytes(result, "thinking.display").Int())
+	})
+
+	t.Run("no thinking object is untouched", func(t *testing.T) {
+		input := []byte(`{"model":"claude-opus-4-8","max_tokens":1024,"messages":[{"role":"user","content":"hi"}]}`)
+		result, err := PrepareBedrockRequestBodyWithTokens(input, model, nil, false)
+		require.NoError(t, err)
+		assert.False(t, gjson.GetBytes(result, "thinking").Exists())
 	})
 }
