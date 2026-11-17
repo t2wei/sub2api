@@ -118,8 +118,23 @@ func isWebSearchToolJSON(tool gjson.Result) bool {
 	return false
 }
 
+// claudeCodeWebSearchQueryPrefix is how Claude Code's WebSearch tool phrases
+// its side query ("Perform a web search for the query: <q>"). The model would
+// read past it; a search API would search for it, so it is dropped.
+const claudeCodeWebSearchQueryPrefix = "Perform a web search for the query:"
+
 // extractSearchQueryFromBody extracts the last user message text as the search query.
 func extractSearchQueryFromBody(body []byte) string {
+	query := extractLastUserText(body)
+	if rest, ok := strings.CutPrefix(strings.TrimSpace(query), claudeCodeWebSearchQueryPrefix); ok {
+		if rest = strings.TrimSpace(rest); rest != "" {
+			return rest
+		}
+	}
+	return query
+}
+
+func extractLastUserText(body []byte) string {
 	messages := gjson.GetBytes(body, "messages")
 	if !messages.IsArray() {
 		return ""

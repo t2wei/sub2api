@@ -2428,8 +2428,13 @@ const (
 // 三态：default（跟随渠道）/ enabled（强制开启）/ disabled（强制关闭）。
 // 兼容旧 bool 值：true→enabled, false→default（并记录 debug 日志）。
 func (a *Account) GetWebSearchEmulationMode() string {
-	if a == nil || a.Type != AccountTypeAPIKey || a.Extra == nil ||
-		!webSearchEmulationPlatformEnabled(a.Platform) {
+	// Bedrock accounts opt in the same way as API key accounts: Bedrock rejects
+	// Anthropic's server tools (web_search_20250305) with a 400, so emulation is
+	// the only way a search side query succeeds there. The channel-level switch
+	// is per platform and would also catch the OAuth accounts of the same group.
+	apiKeyAccount := a != nil && a.Type == AccountTypeAPIKey &&
+		webSearchEmulationPlatformEnabled(a.Platform)
+	if a == nil || a.Extra == nil || (!apiKeyAccount && !a.IsBedrock()) {
 		return WebSearchModeDefault
 	}
 	raw := a.Extra[featureKeyWebSearchEmulation]

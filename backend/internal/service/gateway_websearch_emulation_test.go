@@ -466,3 +466,42 @@ func TestShouldEmulateWebSearchFor_AccountChannelModes(t *testing.T) {
 		}
 	}
 }
+
+func TestShouldEmulateWebSearch_BedrockAccountEnabled(t *testing.T) {
+	mgr := websearch.NewManager([]websearch.ProviderConfig{{Type: "brave", APIKey: "k"}}, nil)
+	SetWebSearchManager(mgr)
+	defer SetWebSearchManager(nil)
+
+	setGlobalWebSearchConfig(&WebSearchEmulationConfig{
+		Enabled:   true,
+		Providers: []WebSearchProviderConfig{{Type: "brave", APIKey: "k"}},
+	})
+	defer clearGlobalWebSearchConfig()
+
+	svc := &GatewayService{settingService: newSettingServiceForWebSearchTest(true)}
+	bedrock := &Account{
+		Platform: PlatformAnthropic,
+		Type:     AccountTypeBedrock,
+		Extra:    map[string]any{featureKeyWebSearchEmulation: WebSearchModeEnabled},
+	}
+	require.True(t, svc.shouldEmulateWebSearch(context.Background(), bedrock, nil, webSearchToolBody))
+
+	bedrock.Extra = map[string]any{}
+	require.False(t, svc.shouldEmulateWebSearch(context.Background(), bedrock, nil, webSearchToolBody),
+		"a Bedrock account without the account switch and without a channel stays as before")
+}
+
+func TestExtractSearchQueryFromBody_ClaudeCodePrefix(t *testing.T) {
+	cases := map[string]string{
+		"Perform a web search for the query: golang 1.27 release notes":   "golang 1.27 release notes",
+		"  Perform a web search for the query:   spaced query  ":          "spaced query",
+		"Perform a web search for the query:":                             "Perform a web search for the query:",
+		"what is golang":                                                  "what is golang",
+		"Please Perform a web search for the query: not at the beginning": "Please Perform a web search for the query: not at the beginning",
+	}
+	for text, want := range cases {
+		body, err := json.Marshal(map[string]any{"messages": []map[string]any{{"role": "user", "content": text}}})
+		require.NoError(t, err)
+		require.Equal(t, want, extractSearchQueryFromBody(body), text)
+	}
+}

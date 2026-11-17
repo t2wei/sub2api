@@ -121,3 +121,29 @@ func TestGetWebSearchEmulationMode_NonAPIKeyType(t *testing.T) {
 	}
 	require.Equal(t, WebSearchModeDefault, a.GetWebSearchEmulationMode())
 }
+
+func TestGetWebSearchEmulationMode_Bedrock(t *testing.T) {
+	for _, mode := range []string{WebSearchModeEnabled, WebSearchModeDisabled} {
+		a := &Account{
+			Platform: PlatformAnthropic,
+			Type:     AccountTypeBedrock,
+			Extra:    map[string]any{featureKeyWebSearchEmulation: mode},
+		}
+		require.Equal(t, mode, a.GetWebSearchEmulationMode())
+	}
+
+	unset := &Account{Platform: PlatformAnthropic, Type: AccountTypeBedrock, Extra: map[string]any{}}
+	require.Equal(t, WebSearchModeDefault, unset.GetWebSearchEmulationMode())
+
+	noExtra := &Account{Platform: PlatformAnthropic, Type: AccountTypeBedrock}
+	require.Equal(t, WebSearchModeDefault, noExtra.GetWebSearchEmulationMode())
+}
+
+func TestGetWebSearchEmulationMode_AnthropicOAuthStillIgnoresAccountMode(t *testing.T) {
+	a := &Account{
+		Platform: PlatformAnthropic,
+		Type:     AccountTypeOAuth,
+		Extra:    map[string]any{featureKeyWebSearchEmulation: "enabled"},
+	}
+	require.Equal(t, WebSearchModeDefault, a.GetWebSearchEmulationMode())
+}
