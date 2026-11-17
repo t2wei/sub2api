@@ -2412,8 +2412,13 @@ const (
 func (a *Account) GetWebSearchEmulationMode() string {
 	// OpenAI API Key accounts reach this via /v1/messages; their upstreams
 	// (DeepSeek etc. over Chat Completions) have no web_search tool.
-	if a == nil || a.Type != AccountTypeAPIKey || a.Extra == nil ||
-		(a.Platform != PlatformAnthropic && a.Platform != PlatformOpenAI) {
+	// Bedrock accounts opt in the same way: Bedrock rejects Anthropic's server
+	// tools (web_search_20250305) with a 400, so emulation is the only way a
+	// search side query succeeds there. The channel-level switch is per
+	// platform and would also catch the OAuth accounts of the same group.
+	apiKeyAccount := a != nil && a.Type == AccountTypeAPIKey &&
+		(a.Platform == PlatformAnthropic || a.Platform == PlatformOpenAI)
+	if a == nil || a.Extra == nil || (!apiKeyAccount && !a.IsBedrock()) {
 		return WebSearchModeDefault
 	}
 	raw := a.Extra[featureKeyWebSearchEmulation]
