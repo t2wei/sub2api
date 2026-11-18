@@ -378,6 +378,11 @@ function getOidcCallbackErrorMessage(error: string, description: string): string
       providerName: providerName.value === 'OIDC' ? 'XSci' : providerName.value
     })
   }
+  if (normalizedError === 'group_not_allowed') {
+    return t('auth.oidc.error.groupNotAllowed', {
+      providerName: providerName.value === 'OIDC' ? 'XSci' : providerName.value
+    })
+  }
   return normalizedDescription || normalizedError
 }
 

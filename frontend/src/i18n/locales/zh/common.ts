@@ -363,7 +363,8 @@ export default {
       completing: '正在完成注册...',
       completeRegistrationFailed: '注册失败，请检查邀请码后重试。',
       error: {
-        orgNotAllowed: '当前账号没有 {providerName} 组织访问权限，请联系管理员开通，或切换已加入组织的账号。'
+        orgNotAllowed: '当前账号没有 {providerName} 组织访问权限，请联系管理员开通，或切换已加入组织的账号。',
+        groupNotAllowed: '当前 {providerName} 账号不在允许登录这里的组内，请联系管理员，或切换有权限的账号。'
       }
     },
     oauthFlow: {

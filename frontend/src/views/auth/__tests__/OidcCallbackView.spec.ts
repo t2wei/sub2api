@@ -188,6 +188,28 @@ describe('OidcCallbackView', () => {
     expect(showError).not.toHaveBeenCalledWith(expect.stringContaining('in_oxsci_org'))
   })
 
+  it('shows a friendly group error when the site requires groups the account lacks', async () => {
+    window.location.hash =
+      '#error=group_not_allowed&error_description=userinfo+groups+must+match+oidc_connect_required_groups'
+
+    mount(OidcCallbackView, {
+      global: {
+        stubs: {
+          AuthLayout: { template: '<div><slot /></div>' },
+          Icon: true,
+          RouterLink: { template: '<a><slot /></a>' },
+          transition: false
+        }
+      }
+    })
+
+    await flushPromises()
+
+    expect(exchangePendingOAuthCompletion).not.toHaveBeenCalled()
+    expect(showError).toHaveBeenCalledWith('auth.oidc.error.groupNotAllowed:XSci')
+    expect(showError).not.toHaveBeenCalledWith(expect.stringContaining('oidc_connect_required_groups'))
+  })
+
   it('does not send adoption decisions during the initial exchange', async () => {
     exchangePendingOAuthCompletion.mockResolvedValue({
       access_token: 'access-token',
