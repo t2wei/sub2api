@@ -438,7 +438,17 @@ export default {
         userinfoIdPath: 'UserInfo ID Path',
         userinfoIdPathPlaceholder: 'for example data.id',
         userinfoUsernamePath: 'UserInfo Username Path',
-        userinfoUsernamePathPlaceholder: 'for example data.username'
+        userinfoUsernamePathPlaceholder: 'for example data.username',
+        requiredGroups: {
+          title: 'Required groups',
+          hint: 'Only let an OIDC login through when the provider\'s groups claim has at least one of these. One per line; an entry ending in * matches by prefix (staff.* matches staff.basic). Leave empty to allow everyone. Saved on its own and applies from the next login; sessions and API keys already issued are not affected.',
+          placeholder: 'staff.*',
+          statusOpen: 'No requirement: every OIDC login is allowed',
+          statusRestricted: 'Only logins with one of these groups: {groups}',
+          saved: 'Required groups saved',
+          loadFailed: 'Failed to load required groups',
+          retry: 'Retry'
+        }
       },
       defaults: {
         title: 'Default User Settings',

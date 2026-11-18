@@ -1388,6 +1388,31 @@ export async function updateRegistrationEmailBlacklist(
   return data;
 }
 
+/** Groups an OIDC login must have one of; an empty list means no requirement. */
+export interface OIDCRequiredGroups {
+  /** Group names; an entry ending in "*" matches by prefix ("staff.*"). */
+  groups: string[];
+  max: number;
+}
+
+export async function getOIDCRequiredGroups(): Promise<OIDCRequiredGroups> {
+  const { data } = await apiClient.get<OIDCRequiredGroups>(
+    "/admin/settings/oidc-required-groups",
+  );
+  return data;
+}
+
+/** Replace the whole requirement; an empty array removes it. */
+export async function updateOIDCRequiredGroups(
+  groups: string[],
+): Promise<OIDCRequiredGroups> {
+  const { data } = await apiClient.put<OIDCRequiredGroups>(
+    "/admin/settings/oidc-required-groups",
+    { groups },
+  );
+  return data;
+}
+
 export async function getPanelRateLimitSettings(): Promise<PanelRateLimitSettings> {
   const { data } = await apiClient.get<PanelRateLimitSettings>(
     "/admin/settings/panel-rate-limit",
@@ -1634,6 +1659,8 @@ export const settingsAPI = {
   updateRateLimit429CooldownSettings,
   getRegistrationEmailBlacklist,
   updateRegistrationEmailBlacklist,
+  getOIDCRequiredGroups,
+  updateOIDCRequiredGroups,
   getPanelRateLimitSettings,
   updatePanelRateLimitSettings,
   getStreamTimeoutSettings,

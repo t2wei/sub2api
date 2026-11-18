@@ -431,6 +431,16 @@ func (h *AuthHandler) OIDCOAuthCallback(c *gin.Context) {
 		return
 	}
 
+	if allowed, required, err := h.oidcLoginGroupsAllowed(c.Request.Context(), userInfoClaims.Groups); err != nil {
+		log.Printf("[OIDC OAuth] rejected login because the required groups could not be read: issuer=%q subject=%q email=%q err=%v", issuer, subject, compatEmail, err)
+		redirectOAuthError(c, frontendCallback, "config_error", "failed to read the groups required to sign in", "")
+		return
+	} else if !allowed {
+		log.Printf("[OIDC OAuth] rejected login because userinfo.groups match none of the required groups: issuer=%q subject=%q email=%q groups=%q required=%q", issuer, subject, compatEmail, userInfoClaims.Groups, required)
+		redirectOAuthError(c, frontendCallback, "group_not_allowed", "account is not in a group allowed to sign in", "userinfo groups must match oidc_connect_required_groups")
+		return
+	}
+
 	if intent == oauthIntentBindCurrentUser {
 		targetUserID, err := h.readOAuthBindUserIDFromCookie(c, oidcOAuthBindUserCookieName)
 		if err != nil {

@@ -3779,6 +3779,9 @@
                     />
                   </div>
                 </div>
+
+                <!-- Groups an OIDC login must have (own endpoint, saved on its own) -->
+                <OIDCRequiredGroupsEditor />
               </div>
             </div>
           </div>
@@ -9004,6 +9007,7 @@ import {
   type RechargeBonusTierDraft,
 } from "@/utils/rechargeBonus";
 import RegistrationEmailBlacklistEditor from "@/components/admin/settings/RegistrationEmailBlacklistEditor.vue";
+import OIDCRequiredGroupsEditor from "@/components/admin/settings/OIDCRequiredGroupsEditor.vue";
 import OpenAIFastPolicyUserSelector from "@/views/admin/settings/OpenAIFastPolicyUserSelector.vue";
 import { useClipboard } from "@/composables/useClipboard";
 import {

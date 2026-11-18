@@ -365,7 +365,8 @@ export default {
       completing: 'Completing registration…',
       completeRegistrationFailed: 'Registration failed. Please check your invitation code and try again.',
       error: {
-        orgNotAllowed: 'This account does not have {providerName} organization access. Contact an administrator or switch to an account that has access.'
+        orgNotAllowed: 'This account does not have {providerName} organization access. Contact an administrator or switch to an account that has access.',
+        groupNotAllowed: 'This {providerName} account is not in a group that may sign in here. Contact an administrator or switch to an account that has access.'
       }
     },
     oauthFlow: {

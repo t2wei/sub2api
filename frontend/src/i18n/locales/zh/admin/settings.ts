@@ -435,7 +435,17 @@ export default {
         userinfoIdPath: 'UserInfo ID 字段路径',
         userinfoIdPathPlaceholder: '例如 data.id',
         userinfoUsernamePath: 'UserInfo 用户名字段路径',
-        userinfoUsernamePathPlaceholder: '例如 data.username'
+        userinfoUsernamePathPlaceholder: '例如 data.username',
+        requiredGroups: {
+          title: '登录要求的组',
+          hint: '只有 OIDC 提供方的 groups 声明里至少有一项匹配时才允许登录。每行一项；以 * 结尾的按前缀匹配（staff.* 匹配 staff.basic）。留空表示不限。单独保存，下一次登录起生效；已签发的会话和 API Key 不受影响。',
+          placeholder: 'staff.*',
+          statusOpen: '不限：所有 OIDC 登录都允许',
+          statusRestricted: '只允许带以下任一组的登录：{groups}',
+          saved: '登录要求的组已保存',
+          loadFailed: '加载登录要求的组失败',
+          retry: '重试'
+        }
       },
       defaults: {
         title: '用户默认设置',
