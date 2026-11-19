@@ -1388,6 +1388,30 @@ export async function updateRegistrationEmailBlacklist(
   return data;
 }
 
+/** Call logging to data-service: the runtime switch (off by default). */
+export interface LLMLoggingSetting {
+  enabled: boolean;
+  /** Whether a sink URL is configured; without one the switch has no effect. */
+  sink_configured: boolean;
+}
+
+export async function getLLMLoggingSetting(): Promise<LLMLoggingSetting> {
+  const { data } = await apiClient.get<LLMLoggingSetting>(
+    "/admin/settings/llm-logging",
+  );
+  return data;
+}
+
+export async function updateLLMLoggingSetting(
+  enabled: boolean,
+): Promise<LLMLoggingSetting> {
+  const { data } = await apiClient.put<LLMLoggingSetting>(
+    "/admin/settings/llm-logging",
+    { enabled },
+  );
+  return data;
+}
+
 /** Groups an OIDC login must have one of; an empty list means no requirement. */
 export interface OIDCRequiredGroups {
   /** Group names; an entry ending in "*" matches by prefix ("staff.*"). */
@@ -1661,6 +1685,8 @@ export const settingsAPI = {
   updateRegistrationEmailBlacklist,
   getOIDCRequiredGroups,
   updateOIDCRequiredGroups,
+  getLLMLoggingSetting,
+  updateLLMLoggingSetting,
   getPanelRateLimitSettings,
   updatePanelRateLimitSettings,
   getStreamTimeoutSettings,

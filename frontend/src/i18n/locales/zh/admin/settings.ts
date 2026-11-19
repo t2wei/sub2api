@@ -1099,6 +1099,16 @@ export default {
         securityWarning: '警告：此密钥拥有完整的管理员权限，请妥善保管。',
         usage: '使用方法：在请求头中添加 x-api-key: <your-admin-api-key>'
       },
+      llmLogging: {
+        title: '调用日志（data-service）',
+        description: '把每次网关调用（请求与响应消息、模型、token 用量）发往 data-service 的调用日志。缺省关闭。保存后本节点下一个请求起生效，其他节点一分钟内生效。',
+        enabled: '记录调用',
+        enabledHint: '关闭时不截取请求内容，也不发送任何东西。',
+        sinkMissing: '没有配置接收端（llm_logging.url 为空），打开也不会生效。',
+        saved: '调用日志设置已保存',
+        loadFailed: '加载调用日志设置失败',
+        retry: '重试'
+      },
       overloadCooldown: {
         title: '529 过载冷却',
         description: '配置上游返回 529（过载）时的账号调度暂停策略',

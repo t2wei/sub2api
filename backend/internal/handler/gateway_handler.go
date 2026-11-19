@@ -106,13 +106,14 @@ func NewGatewayHandler(
 	// [OXSCI] 初始化生命周期钩子（基于配置组合多个钩子）
 	var hooks []RequestLifecycleHook
 
-	// LLM日志钩子（如果启用）
-	if cfg != nil && cfg.LLMLogging.Enabled && cfg.LLMLogging.URL != "" {
+	// LLM 调用日志钩子：配置了 sink URL 才挂；是否投递由运行时开关 llm_logging_enabled
+	// （管理端设置，缺省关）逐请求决定，关着时请求路径不截取任何内容。
+	if cfg != nil && cfg.LLMLogging.URL != "" && settingService != nil {
 		llmLogClient := client.NewLLMLogClient(cfg.LLMLogging)
-		hooks = append(hooks, NewLLMLoggingHook(llmLogClient, true))
+		hooks = append(hooks, NewLLMLoggingHook(llmLogClient, settingService.LLMLoggingEnabled))
 	}
 
-	// Disabled logging leaves the hook nil so the request path does not capture bodies.
+	// With no sink configured the hook is nil, so the request path does not capture bodies.
 	var lifecycleHook RequestLifecycleHook
 	if len(hooks) > 0 {
 		lifecycleHook = NewCompositeHook(hooks...)

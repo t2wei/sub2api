@@ -145,6 +145,12 @@ type SettingService struct {
 	panelRateLimitCache atomic.Value
 	panelRateLimitSF    singleflight.Group
 
+	// [OXSCI] llmLoggingEnabledCache caches the call-logging switch (*cachedLLMLoggingEnabled,
+	// 60s TTL), read on every gateway request; see setting_llm_logging.go.
+	llmLoggingEnabledMu    sync.Mutex
+	llmLoggingEnabledCache atomic.Value
+	llmLoggingEnabledSF    singleflight.Group
+
 	// registrationEmailBlacklistCache 精确邮箱黑名单进程内缓存（*registrationEmailBlacklistIndex，60s TTL）。
 	// 公开的注册与发码接口每次请求都会读取，禁止在热路径上直接访问 DB。
 	// registrationEmailBlacklistMu 串行化刷新时的「读 DB + 写缓存」与保存后的写缓存，

@@ -1378,6 +1378,9 @@
               </div>
             </div>
           </div>
+
+          <!-- [OXSCI] Call logging to data-service (own endpoint, saved on its own) -->
+          <LLMLoggingSettingCard />
         </div>
         <!-- /Tab: Gateway -->
 
@@ -9008,6 +9011,7 @@ import {
 } from "@/utils/rechargeBonus";
 import RegistrationEmailBlacklistEditor from "@/components/admin/settings/RegistrationEmailBlacklistEditor.vue";
 import OIDCRequiredGroupsEditor from "@/components/admin/settings/OIDCRequiredGroupsEditor.vue";
+import LLMLoggingSettingCard from "@/components/admin/settings/LLMLoggingSettingCard.vue";
 import OpenAIFastPolicyUserSelector from "@/views/admin/settings/OpenAIFastPolicyUserSelector.vue";
 import { useClipboard } from "@/composables/useClipboard";
 import {
