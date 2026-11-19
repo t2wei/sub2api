@@ -759,6 +759,18 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 		return s.handleRetryExhaustedError(ctx, resp, c, account, reqModel)
 	}
 
+	// OxSci (P160 T3): an Anthropic OAuth / setup-token 429 that rejects this
+	// request rather than the account goes straight back to the caller, with no
+	// failover and no account cooldown. See isAnthropicRequestLevel429.
+	if resp.StatusCode == http.StatusTooManyRequests && account.IsAnthropicOAuthOrSetupToken() {
+		respBody, _ := s.readUpstreamErrorBody(resp)
+		_ = resp.Body.Close()
+		resp.Body = io.NopCloser(bytes.NewReader(respBody))
+		if isAnthropicRequestLevel429(account, resp.StatusCode, resp.Header, respBody) {
+			return s.handleAnthropicRequestLevel429(c, resp, account, respBody)
+		}
+	}
+
 	// 处理可切换账号的错误
 	if resp.StatusCode >= 400 && s.shouldFailoverUpstreamError(resp.StatusCode) {
 		respBody, _ := s.readUpstreamErrorBody(resp)
