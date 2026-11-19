@@ -77,8 +77,15 @@ func NewCompositeHook(hooks ...RequestLifecycleHook) *CompositeHook {
 func (h *CompositeHook) OnRequestStart(ctx context.Context, req *RequestStartEvent) any {
 	// 为每个子 Hook 创建一个 context map
 	contexts := make(map[int]any)
+	active := false
 	for i, hook := range h.hooks {
 		contexts[i] = hook.OnRequestStart(ctx, req)
+		active = active || contexts[i] != nil
+	}
+	// [OXSCI] No hook wants this request (e.g. call logging switched off): answer nil
+	// so the gateway skips the lifecycle entirely and captures nothing.
+	if !active {
+		return nil
 	}
 	return contexts
 }

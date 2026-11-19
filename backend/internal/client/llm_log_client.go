@@ -5,9 +5,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -67,6 +69,39 @@ type LLMCallCreateResponse struct {
 	ID int64 `json:"id"`
 }
 
+// llmCallCreateEnvelope accepts data-service's standard response, which carries the
+// created row under "data", as well as a bare {"id": ...}.
+type llmCallCreateEnvelope struct {
+	ID   int64                  `json:"id"`
+	Data *LLMCallCreateResponse `json:"data"`
+}
+
+// StatusError is a sink response with an unexpected HTTP status.
+type StatusError struct {
+	StatusCode int
+}
+
+func (e *StatusError) Error() string {
+	return fmt.Sprintf("unexpected status code: %d", e.StatusCode)
+}
+
+// withoutURL drops the request URL from a parse or transport failure, keeping only
+// the cause (refused, timeout, DNS ...), so a URL carrying credentials never reaches
+// a log.
+func withoutURL(op string, err error) error {
+	var urlErr *url.Error
+	if errors.As(err, &urlErr) && urlErr.Err != nil {
+		return fmt.Errorf("%s: %w", op, urlErr.Err)
+	}
+	return fmt.Errorf("%s: %w", op, err)
+}
+
+// createURL is the collection URL with a trailing slash: data-service registers the
+// create route as POST {prefix}/llm_calls/ and does not redirect a missing slash.
+func (c *LLMLogClient) createURL() string {
+	return c.baseURL + "/"
+}
+
 // CreateLLMCall creates a new LLM call log entry.
 func (c *LLMLogClient) CreateLLMCall(ctx context.Context, req *LLMCallCreateRequest) (*LLMCallCreateResponse, error) {
 	body, err := json.Marshal(req)
@@ -74,9 +109,9 @@ func (c *LLMLogClient) CreateLLMCall(ctx context.Context, req *LLMCallCreateRequ
 		return nil, fmt.Errorf("marshal request: %w", err)
 	}
 
-	httpReq, err := http.NewRequestWithContext(ctx, "POST", c.baseURL, bytes.NewReader(body))
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", c.createURL(), bytes.NewReader(body))
 	if err != nil {
-		return nil, fmt.Errorf("create request: %w", err)
+		return nil, withoutURL("create request", err)
 	}
 
 	httpReq.Header.Set("Content-Type", "application/json")
@@ -87,20 +122,28 @@ func (c *LLMLogClient) CreateLLMCall(ctx context.Context, req *LLMCallCreateRequ
 
 	resp, err := c.httpClient.Do(httpReq)
 	if err != nil {
-		return nil, fmt.Errorf("do request: %w", err)
+		return nil, withoutURL("do request", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
-		return nil, fmt.Errorf("unexpected status code: %d", resp.StatusCode)
+		return nil, &StatusError{StatusCode: resp.StatusCode}
 	}
 
-	var result LLMCallCreateResponse
-	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&result); err != nil {
-		return nil, fmt.Errorf("decode response: %w", err)
+	var envelope llmCallCreateEnvelope
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&envelope); err != nil {
+		// The decoder's message can quote response bytes; keep only the fact.
+		return nil, errors.New("decode response: body is not the expected JSON")
+	}
+	id := envelope.ID
+	if envelope.Data != nil && envelope.Data.ID > 0 {
+		id = envelope.Data.ID
+	}
+	if id <= 0 {
+		return nil, errors.New("decode response: no call id in the response")
 	}
 
-	return &result, nil
+	return &LLMCallCreateResponse{ID: id}, nil
 }
 
 // UpdateLLMCall updates an existing LLM call log entry.
@@ -113,7 +156,7 @@ func (c *LLMLogClient) UpdateLLMCall(ctx context.Context, id int64, req *LLMCall
 	url := fmt.Sprintf("%s/%d", c.baseURL, id)
 	httpReq, err := http.NewRequestWithContext(ctx, "PUT", url, bytes.NewReader(body))
 	if err != nil {
-		return fmt.Errorf("create request: %w", err)
+		return withoutURL("create request", err)
 	}
 
 	httpReq.Header.Set("Content-Type", "application/json")
@@ -124,12 +167,12 @@ func (c *LLMLogClient) UpdateLLMCall(ctx context.Context, id int64, req *LLMCall
 
 	resp, err := c.httpClient.Do(httpReq)
 	if err != nil {
-		return fmt.Errorf("do request: %w", err)
+		return withoutURL("do request", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
-		return fmt.Errorf("unexpected status code: %d", resp.StatusCode)
+		return &StatusError{StatusCode: resp.StatusCode}
 	}
 
 	return nil

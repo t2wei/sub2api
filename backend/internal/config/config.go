@@ -714,10 +714,10 @@ func normalizeWeChatConnectConfig(cfg *WeChatConnectConfig) {
 }
 
 // LLMLoggingConfig LLM 调用日志配置
-// [OXSCI] 用于记录 LLM 调用日志到 data-service
+// [OXSCI] 用于记录 LLM 调用日志到 data-service。这里只配 sink（地址、凭据、超时）；
+// 开关是管理端运行时设置 llm_logging_enabled（缺省关），原 llm_logging.enabled 已移除、不再读取。
 type LLMLoggingConfig struct {
-	Enabled        bool   `mapstructure:"enabled"`         // 是否启用 LLM 日志记录
-	URL            string `mapstructure:"url"`             // data-service LLM 日志 API 地址
+	URL            string `mapstructure:"url"`             // data-service LLM 日志 API 地址（空 = 不挂钩子）
 	AgentName      string `mapstructure:"agent_name"`      // 代理名称（用于标识日志来源）
 	APIKey         string `mapstructure:"api_key"`         // [OXSCI] API Key for Lambda Proxy access
 	TimeoutSeconds int    `mapstructure:"timeout_seconds"` // HTTP 请求超时时间（秒）
@@ -2189,7 +2189,6 @@ func setDefaults() {
 	viper.SetDefault("log.sampling.thereafter", 100)
 
 	// LLM logging
-	viper.SetDefault("llm_logging.enabled", false)
 	viper.SetDefault("llm_logging.url", "")
 	viper.SetDefault("llm_logging.agent_name", "sub2api")
 	viper.SetDefault("llm_logging.api_key", "")

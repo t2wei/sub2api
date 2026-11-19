@@ -1360,15 +1360,15 @@ image_storage:
 # [OXSCI] LLM Logging Configuration
 # [OXSCI] LLM 调用日志配置
 # =============================================================================
-# Enable logging of LLM calls to data-service for monitoring and analytics.
-# 启用 LLM 调用日志记录，用于监控和分析。
+# Where to send LLM call logs (data-service). This only configures the sink; whether
+# calls are sent is the runtime switch in Admin > Settings > Gateway ("Call logging",
+# setting llm_logging_enabled), off by default. An empty url leaves the hook out.
+# 调用日志发往哪里（data-service）。这里只配 sink；发不发由管理端「设置 > 网关 > 调用日志」
+# 的运行时开关决定（llm_logging_enabled，缺省关）。url 为空则不挂钩子。
 llm_logging:
-  # Enable LLM call logging
-  # 启用 LLM 调用日志记录
-  enabled: false
-  # data-service LLM logging API endpoint
-  # data-service LLM 日志 API 端点
-  # Example: "http://data-service:8001/api/v1/llm-calls"
+  # data-service LLM call collection URL (POST {url}/ creates, PUT {url}/{id} updates)
+  # data-service LLM 调用集合地址（POST {url}/ 创建，PUT {url}/{id} 更新）
+  # Example: "http://localhost:8008/api/database/v1/llm_calls"
   url: ""
   # Agent name for identifying the log source
   # 代理名称（用于标识日志来源）

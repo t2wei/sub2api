@@ -1105,6 +1105,16 @@ export default {
         securityWarning: 'Warning: This key provides full admin access. Keep it secure.',
         usage: 'Usage: Add to request header - x-api-key: <your-admin-api-key>'
       },
+      llmLogging: {
+        title: 'Call logging to data-service',
+        description: 'Send each gateway call (request and response messages, model, token usage) to the data-service call log. Off by default. Applies from the next request on this node and within a minute on the others.',
+        enabled: 'Log calls',
+        enabledHint: 'While off, requests are not captured and nothing is sent.',
+        sinkMissing: 'No sink is configured (llm_logging.url is empty), so turning this on has no effect.',
+        saved: 'Call logging setting saved',
+        loadFailed: 'Failed to load the call logging setting',
+        retry: 'Retry'
+      },
       overloadCooldown: {
         title: '529 Overload Cooldown',
         description: 'Configure account scheduling pause strategy when upstream returns 529 (overloaded)',

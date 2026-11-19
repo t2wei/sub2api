@@ -602,6 +602,9 @@ func registerSettingsRoutes(admin *gin.RouterGroup, h *handler.Handlers, stepUpA
 		// OIDC 登录要求的组
 		adminSettings.GET("/oidc-required-groups", h.Admin.Setting.GetOIDCRequiredGroups)
 		adminSettings.PUT("/oidc-required-groups", h.Admin.Setting.UpdateOIDCRequiredGroups)
+		// [OXSCI] 调用日志开关（缺省关）
+		adminSettings.GET("/llm-logging", h.Admin.Setting.GetLLMLoggingSetting)
+		adminSettings.PUT("/llm-logging", h.Admin.Setting.UpdateLLMLoggingSetting)
 		// 面板 API 限流配置
 		adminSettings.GET("/panel-rate-limit", h.Admin.Setting.GetPanelRateLimitSettings)
 		adminSettings.PUT("/panel-rate-limit", h.Admin.Setting.UpdatePanelRateLimitSettings)
