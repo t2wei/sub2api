@@ -46,13 +46,26 @@ func (s *GatewayService) EarliestRecoveryForPlatform(
 	requestedModel string,
 	platform string,
 ) (at time.Time, known bool, err error) {
+	candidates, err := s.xsciModelCandidates(ctx, groupID, requestedModel, platform)
+	if err != nil {
+		return time.Time{}, false, err
+	}
+	at, known = earliestRecoveryAt(ctx, candidates, strings.TrimSpace(requestedModel), time.Now())
+	return at, known, nil
+}
+
+// xsciModelCandidates lists the group's persistently enabled accounts (active
+// + schedulable) that are configured for requestedModel, with the platform
+// scoping of DiagnoseModelAvailabilityForPlatform. Transient state is not
+// filtered: callers read it.
+func (s *GatewayService) xsciModelCandidates(ctx context.Context, groupID *int64, requestedModel, platform string) ([]*Account, error) {
 	if s == nil || s.accountRepo == nil {
-		return time.Time{}, false, nil
+		return nil, nil
 	}
 	requestedModel = strings.TrimSpace(requestedModel)
 	platform = strings.TrimSpace(platform)
 	if platform == "" {
-		return time.Time{}, false, nil
+		return nil, nil
 	}
 
 	useMixed := platform == PlatformAnthropic || platform == PlatformGemini
@@ -73,7 +86,7 @@ func (s *GatewayService) EarliestRecoveryForPlatform(
 
 	accounts, err := s.accountRepo.ListModelAvailabilityCandidates(ctx, queryGroupID, platforms, includeGrouped)
 	if err != nil {
-		return time.Time{}, false, err
+		return nil, err
 	}
 
 	candidates := make([]*Account, 0, len(accounts))
@@ -87,8 +100,7 @@ func (s *GatewayService) EarliestRecoveryForPlatform(
 		}
 		candidates = append(candidates, acc)
 	}
-	at, known = earliestRecoveryAt(ctx, candidates, requestedModel, time.Now())
-	return at, known, nil
+	return candidates, nil
 }
 
 // earliestRecoveryAt is the minimum of accountRecoveryAt over the candidates.

@@ -153,6 +153,7 @@ func classifyNoAccountErrorFromGin(
 		ctx = c.Request.Context()
 	}
 	classification := classifyNoAccountError(ctx, diag, apiKey, routingModel, displayModel, platform)
+	classification = xsciModelNotFoundEverywhere(c, ctx, diag, apiKey, routingModel, displayModel, platform, classification) // [OXSCI] P160 T9
 	if classification.ModelNotFound {
 		service.MarkOpsClientBusinessLimited(c, service.OpsClientBusinessLimitedReasonLocalModelConfiguration)
 	}

@@ -43,6 +43,10 @@ func (s *GatewayService) ForwardCountTokens(ctx context.Context, c *gin.Context,
 	}
 	if account != nil && account.Platform == PlatformAnthropic {
 		if err := validateClaude55Request(parsed.Body.Bytes(), validationModel); err != nil {
+			if XSciAnthropicSurface(c) { // [OXSCI] P160 T9
+				xsciWriteRequestRuleError(c, err)
+				return err
+			}
 			s.countTokensError(c, http.StatusBadRequest, "invalid_request_error", err.Error())
 			return err
 		}
@@ -258,7 +262,9 @@ func (s *GatewayService) ForwardCountTokens(ctx context.Context, c *gin.Context,
 		case 529:
 			errMsg = "Service overloaded"
 		}
-		s.countTokensError(c, resp.StatusCode, "upstream_error", errMsg)
+		if !xsciWriteUpstreamAnswer(c, account, resp.StatusCode, resp.Header, respBody) { // [OXSCI] P160 T9: count_tokens never fails over; the upstream's answer goes back as it is
+			s.countTokensError(c, resp.StatusCode, "upstream_error", errMsg)
+		}
 		if upstreamMsg == "" {
 			return fmt.Errorf("upstream error: %d", resp.StatusCode)
 		}
@@ -375,7 +381,9 @@ func (s *GatewayService) forwardCountTokensAnthropicAPIKeyPassthrough(ctx contex
 		case 529:
 			errMsg = "Service overloaded"
 		}
-		s.countTokensError(c, resp.StatusCode, "upstream_error", errMsg)
+		if !xsciWriteUpstreamAnswer(c, account, resp.StatusCode, resp.Header, respBody) { // [OXSCI] P160 T9: count_tokens never fails over; the upstream's answer goes back as it is
+			s.countTokensError(c, resp.StatusCode, "upstream_error", errMsg)
+		}
 		if upstreamMsg == "" {
 			return fmt.Errorf("upstream error: %d", resp.StatusCode)
 		}
@@ -653,6 +661,10 @@ func sanitizeCountTokensRequestBody(body []byte) []byte {
 
 // countTokensError 返回 count_tokens 错误响应
 func (s *GatewayService) countTokensError(c *gin.Context, status int, errType, message string) {
+	if XSciAnthropicSurface(c) { // [OXSCI] P160 T9
+		XSciWriteGatewayError(c, XSciClassifyGatewayError(status, errType, "", message), false)
+		return
+	}
 	c.JSON(status, gin.H{
 		"type": "error",
 		"error": gin.H{

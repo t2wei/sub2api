@@ -2010,6 +2010,10 @@ func (h *GatewayHandler) handleConcurrencyError(c *gin.Context, err error, slotT
 }
 
 func (h *GatewayHandler) handleFailoverExhausted(c *gin.Context, failoverErr *service.UpstreamFailoverError, platform string, streamStarted bool) {
+	if service.XSciAnthropicSurface(c) { // [OXSCI] P160 T9
+		h.xsciFailoverExhausted(c, failoverErr, platform, streamStarted)
+		return
+	}
 	statusCode := failoverErr.StatusCode
 	responseBody := failoverErr.ResponseBody
 	if service.IsOpenAISilentRefusalErrorBody(responseBody) {
@@ -2053,6 +2057,10 @@ func (h *GatewayHandler) handleFailoverExhausted(c *gin.Context, failoverErr *se
 
 // handleFailoverExhaustedSimple 简化版本，用于没有响应体的情况
 func (h *GatewayHandler) handleFailoverExhaustedSimple(c *gin.Context, statusCode int, streamStarted bool) {
+	if service.XSciAnthropicSurface(c) { // [OXSCI] P160 T9
+		h.xsciFailoverExhausted(c, nil, "", streamStarted)
+		return
+	}
 	status, errType, errMsg := h.mapUpstreamError(statusCode)
 	service.SetOpsUpstreamError(c, statusCode, errMsg, "")
 	h.handleStreamingAwareError(c, status, errType, errMsg, streamStarted)
@@ -2081,6 +2089,10 @@ func (h *GatewayHandler) handleStreamingAwareError(c *gin.Context, status int, e
 }
 
 func (h *GatewayHandler) handleStreamingAwareErrorWithCode(c *gin.Context, status int, errType, code, message string, streamStarted bool) {
+	if service.XSciAnthropicSurface(c) { // [OXSCI] P160 T9
+		xsciStreamingAwareError(c, status, errType, code, message, streamStarted)
+		return
+	}
 	if streamStarted {
 		// 响应状态码已固化为 200（ping/部分数据已 flush），错误只能就地以 SSE 帧回传。
 		// 标记本次流内错误，供 ops_error_logger 补记——否则该中间件按 status>=400 采集，
@@ -2134,6 +2146,10 @@ func (h *GatewayHandler) ensureForwardErrorResponse(c *gin.Context, streamStarte
 	}
 	if c.Writer.Written() {
 		streamStarted = true
+	}
+	if service.XSciAnthropicSurface(c) { // [OXSCI] P160 T9
+		service.XSciWriteForwardFailed(c, streamStarted)
+		return true
 	}
 	h.handleStreamingAwareError(c, http.StatusBadGateway, "upstream_error", "Upstream request failed", streamStarted)
 	return true
@@ -2214,6 +2230,10 @@ func (h *GatewayHandler) errorResponse(c *gin.Context, status int, errType, mess
 }
 
 func (h *GatewayHandler) errorResponseWithCode(c *gin.Context, status int, errType, code, message string) {
+	if service.XSciAnthropicSurface(c) { // [OXSCI] P160 T9
+		xsciStreamingAwareError(c, status, errType, code, message, false)
+		return
+	}
 	errorObject := gin.H{"type": errType, "message": message}
 	if code != "" {
 		errorObject["code"] = code

@@ -178,6 +178,7 @@ func RegisterGatewayRoutes(
 
 	// API网关（Claude API兼容）
 	gateway := r.Group("/v1")
+	gateway.Use(handler.XSciClientErrorContract()) // [OXSCI] P160 T9: client error contract on /v1/messages*
 	gateway.Use(bodyLimit)
 	gateway.Use(clientRequestID)
 	gateway.Use(opsErrorLogger)
@@ -384,7 +385,7 @@ func RegisterGatewayRoutes(
 	})
 	rootRoute(http.MethodGet, "/models", bodyLimit, modelsHandler)
 	rootRoute(http.MethodGet, "/models/:model", bodyLimit, h.Gateway.Models)
-	rootRoute(http.MethodPost, "/messages/count_tokens", bodyLimit, countTokensHandler)
+	rootRoute(http.MethodPost, "/messages/count_tokens", handler.XSciClientErrorContractWith(bodyLimit), countTokensHandler) // [OXSCI] P160 T9
 	codexDirect := r.Group("/backend-api/codex")
 	codexDirect.Use(bodyLimit, clientRequestID, opsErrorLogger, endpointNorm, gin.HandlerFunc(apiKeyAuth), groupModelAllowlist, compositeTarget, requireGroupAnthropic)
 	{

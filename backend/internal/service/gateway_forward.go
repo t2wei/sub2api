@@ -138,6 +138,10 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 	}
 	if account != nil && account.Platform == PlatformAnthropic {
 		if err := validateClaude55Request(parsed.Body.Bytes(), validationModel); err != nil {
+			if XSciAnthropicSurface(c) { // [OXSCI] P160 T9
+				xsciWriteRequestRuleError(c, err)
+				return nil, err
+			}
 			c.JSON(http.StatusBadRequest, gin.H{"type": "error", "error": gin.H{"type": "invalid_request_error", "message": err.Error()}})
 			return nil, err
 		}
@@ -1079,6 +1083,7 @@ func (s *GatewayService) isStickyAccountUpstreamRestricted(ctx context.Context, 
 // UpstreamFailoverError：尚未向客户端写出内容且错误类型为 overloaded_error 时按 529
 // 处理并触发账号侧副作用，其余按 403；同时登记 stream_error 运维记录。
 func (s *GatewayService) sseStreamErrorEventFailover(ctx context.Context, c *gin.Context, account *Account, resp *http.Response, rawData, model string, outputStarted bool) *UpstreamFailoverError {
+	xsciNoteUpstreamStreamErrorEvent(c, rawData, outputStarted) // [OXSCI] P160 T9: after output, forward the upstream frame as it is
 	body := []byte(rawData)
 	semanticStatus := http.StatusForbidden
 	if !outputStarted && gjson.GetBytes(body, "error.type").String() == "overloaded_error" {

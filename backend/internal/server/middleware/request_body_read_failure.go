@@ -3,6 +3,7 @@ package middleware
 import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/httputil"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
+	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
 )
@@ -14,6 +15,11 @@ func AbortWithRequestBodyReadFailure(c *gin.Context, component string, err error
 	failure := httputil.DescribeRequestBodyReadFailure(c.Request, err)
 	if failure.Kind != httputil.RequestBodyReadErrorMaxBytes {
 		logRequestBodyReadFailure(c, component, failure)
+	}
+	if service.XSciAnthropicSurface(c) { // [OXSCI] P160 T9
+		service.XSciWriteGatewayError(c, service.XSciClassifyGatewayError(failure.Status, "invalid_request_error", "", failure.Message), false)
+		c.Abort()
+		return
 	}
 	c.AbortWithStatusJSON(failure.Status, gin.H{"error": gin.H{"type": "invalid_request_error", "message": failure.Message}})
 }
