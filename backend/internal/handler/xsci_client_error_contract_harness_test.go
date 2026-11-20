@@ -6,8 +6,9 @@ package handler
 // (docs/xsci-client-error-contract.md, xsci_client_error_contract_test.go).
 //
 // It builds the /v1 chain that routes/gateway.go registers for the Anthropic
-// surface (same middleware, same order; the composite-group rewrite is left
-// out because it is a no-op for anthropic groups) and drives one request
+// surface (same middleware, same order, starting with the contract layer's
+// XSciClientErrorContract; the composite-group rewrite is left out because it
+// is a no-op for anthropic groups) and drives one request
 // through it with a scripted upstream, so each contract row is observed the
 // way a client sees it: status, headers and body bytes.
 
@@ -179,14 +180,57 @@ func (r *ceAccountRepo) ListModelAvailabilityCandidates(_ context.Context, group
 	return out, nil
 }
 
-func (r *ceAccountRepo) SetRateLimited(context.Context, int64, time.Time) error {
+// SetRateLimited and SetModelRateLimit also update the in-memory account, as
+// the database write does on prod, so later lookups in the same request (the
+// Retry-After estimate, the model-unsupported check) see them.
+func (r *ceAccountRepo) SetRateLimited(_ context.Context, id int64, resetAt time.Time) error {
 	r.note("rate_limited")
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, a := range r.accounts {
+		if a.ID == id {
+			at := resetAt
+			a.RateLimitResetAt = &at
+		}
+	}
 	return nil
 }
 
-func (r *ceAccountRepo) SetModelRateLimit(context.Context, int64, string, time.Time, ...string) error {
+func (r *ceAccountRepo) SetModelRateLimit(_ context.Context, id int64, scope string, resetAt time.Time, reason ...string) error {
 	r.note("model_rate_limited")
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, a := range r.accounts {
+		if a.ID == id {
+			a.Extra = ceWithModelRateLimit(a.Extra, scope, resetAt, strings.Join(reason, ""))
+		}
+	}
 	return nil
+}
+
+// ceWithModelRateLimit returns a copy of extra with one model cooldown set,
+// in the shape the account row stores (extra.model_rate_limits[scope]).
+func ceWithModelRateLimit(extra map[string]any, scope string, resetAt time.Time, reason string) map[string]any {
+	out := map[string]any{}
+	for k, v := range extra {
+		out[k] = v
+	}
+	limits := map[string]any{}
+	if old, ok := extra["model_rate_limits"].(map[string]any); ok {
+		for k, v := range old {
+			limits[k] = v
+		}
+	}
+	entry := map[string]any{
+		"rate_limited_at":     time.Now().UTC().Format(time.RFC3339),
+		"rate_limit_reset_at": resetAt.UTC().Format(time.RFC3339),
+	}
+	if reason != "" {
+		entry["reason"] = reason
+	}
+	limits[scope] = entry
+	out["model_rate_limits"] = limits
+	return out
 }
 
 func (r *ceAccountRepo) SetOverloaded(context.Context, int64, time.Time) error {
@@ -511,6 +555,7 @@ func (e *ceEnv) router() (*gin.Engine, *GatewayHandler) {
 	r := gin.New()
 	r.Use(middleware.RequestLogger())
 	v1 := r.Group("/v1")
+	v1.Use(XSciClientErrorContract())
 	v1.Use(middleware.RequestBodyLimit(cfg.Gateway.MaxBodySize, pkghttputil.NewBodyMemoryBudget(cfg.Gateway.RequestBodyMemoryBudgetBytes)))
 	v1.Use(middleware.ClientRequestID())
 	v1.Use(OpsErrorLoggerMiddleware(nil))
@@ -520,11 +565,13 @@ func (e *ceEnv) router() (*gin.Engine, *GatewayHandler) {
 	v1.Use(middleware.RequireGroupAssignment(settingSvc, middleware.AnthropicErrorWriter))
 	v1.POST("/messages", h.Messages)
 	v1.POST("/messages/count_tokens", h.CountTokens)
+	v1.GET("/sub2api/availability", h.KeyAvailability)
 	return r, h
 }
 
 // ceRequest is what the client sends.
 type ceRequest struct {
+	method  string    // default POST
 	path    string    // default /v1/messages
 	body    string    // default: a small messages request for ceModel
 	empty   bool      // send an empty body
@@ -563,7 +610,14 @@ func (e *ceEnv) do(req ceRequest) *httptest.ResponseRecorder {
 	if req.reader != nil {
 		bodyReader = req.reader
 	}
-	httpReq := httptest.NewRequest(http.MethodPost, path, bodyReader)
+	method := req.method
+	if method == "" {
+		method = http.MethodPost
+	}
+	if method == http.MethodGet {
+		bodyReader = http.NoBody
+	}
+	httpReq := httptest.NewRequest(method, path, bodyReader)
 	if req.ctx != nil {
 		httpReq = httpReq.WithContext(req.ctx)
 	}

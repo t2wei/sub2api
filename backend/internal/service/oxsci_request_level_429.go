@@ -122,6 +122,12 @@ func (s *GatewayService) handleAnthropicRequestLevel429(c *gin.Context, resp *ht
 
 	MarkResponseCommitted(c)
 
+	// On the Anthropic surface this is the upstream's own answer to the
+	// request: status and body go back unchanged (P160 T9, contract (a)).
+	if xsciWriteUpstreamAnswer(c, account, resp.StatusCode, resp.Header, body) {
+		return nil, fmt.Errorf("upstream error: %d (request-level, no failover) message=%s", resp.StatusCode, upstreamMsg)
+	}
+
 	status, errType, errMsg, matched := applyErrorPassthroughRule(
 		c,
 		account.Platform,

@@ -168,7 +168,11 @@ func TestKeyAvailability_UnavailableCarriesEarliestRecovery(t *testing.T) {
 	retryAfter, ok := body["retry_after_s"].(float64)
 	require.True(t, ok, "retry_after_s must be present when the recovery time is known: %v", body)
 	require.InDelta(t, 600, retryAfter, 2)
-	require.Equal(t, []int64{availabilityTestGroupID, availabilityTestGroupID}, f.repo.listGroups, "recovery is read for the key's own group")
+	require.Equal(t, "no_available_accounts", body["code"])
+	require.NotEmpty(t, f.repo.listGroups)
+	for _, g := range f.repo.listGroups {
+		require.Equal(t, availabilityTestGroupID, g, "recovery is read for the key's own group")
+	}
 }
 
 func TestKeyAvailability_UnknownRecoveryOmitsRetryAfter(t *testing.T) {
@@ -180,7 +184,7 @@ func TestKeyAvailability_UnknownRecoveryOmitsRetryAfter(t *testing.T) {
 	f.h.KeyAvailability(c)
 
 	require.Equal(t, http.StatusOK, recorder.Code)
-	require.Equal(t, map[string]any{"available": false}, decodeAvailability(t, recorder))
+	require.Equal(t, map[string]any{"available": false, "code": "no_available_accounts"}, decodeAvailability(t, recorder))
 }
 
 func TestKeyAvailability_ClaudeCodeOnlyGroupIsCheckedItself(t *testing.T) {

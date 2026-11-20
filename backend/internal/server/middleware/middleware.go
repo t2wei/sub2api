@@ -76,6 +76,11 @@ func NewErrorResponse(code, message string) ErrorResponse {
 
 // AbortWithError 中断请求并返回JSON错误
 func AbortWithError(c *gin.Context, statusCode int, code, message string) {
+	if service.XSciAnthropicSurface(c) { // [OXSCI] P160 T9: standard envelope, code kept in error.code
+		service.XSciWriteMiddlewareError(c, statusCode, code, message)
+		c.Abort()
+		return
+	}
 	c.JSON(statusCode, NewErrorResponse(code, message))
 	c.Abort()
 }
@@ -103,6 +108,10 @@ type GatewayErrorWriter func(c *gin.Context, status int, message string)
 // AnthropicErrorWriter 按 Anthropic API 规范输出错误；error.type 随状态码映射
 // （404 -> not_found_error，403 -> permission_error，其余 api_error）。
 func AnthropicErrorWriter(c *gin.Context, status int, message string) {
+	if service.XSciAnthropicSurface(c) { // [OXSCI] P160 T9
+		service.XSciWriteGatewayError(c, service.XSciClassifyGatewayError(status, "", "", message), false)
+		return
+	}
 	errorType := "api_error"
 	switch status {
 	case http.StatusNotFound:

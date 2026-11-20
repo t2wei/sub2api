@@ -450,6 +450,11 @@ func (s *GatewayService) handleErrorResponse(ctx context.Context, resp *http.Res
 		)
 	}
 
+	// [OXSCI] P160 T9: on the Anthropic surface the upstream's own answer goes back as it is.
+	if xsciWriteUpstreamAnswer(c, account, resp.StatusCode, resp.Header, body) {
+		return nil, xsciUpstreamAnswerError(resp.StatusCode, body)
+	}
+
 	// 非 failover 错误也支持错误透传规则匹配。
 	if status, errType, errMsg, matched := applyErrorPassthroughRule(
 		c,
@@ -625,6 +630,11 @@ func (s *GatewayService) handleRetryExhaustedError(ctx context.Context, resp *ht
 			account.Type,
 			truncateForLog(respBody, s.cfg.Gateway.LogUpstreamErrorBodyMaxBytes),
 		)
+	}
+
+	// [OXSCI] P160 T9: the same account kept giving the upstream's own answer; it goes back as it is.
+	if xsciWriteUpstreamAnswer(c, account, resp.StatusCode, resp.Header, respBody) {
+		return nil, xsciUpstreamAnswerError(resp.StatusCode, respBody)
 	}
 
 	if status, errType, errMsg, matched := applyErrorPassthroughRule(
@@ -892,6 +902,10 @@ func (s *GatewayService) handleStreamingResponse(ctx context.Context, resp *http
 		errorEventSent = true
 		if message == "" {
 			message = reason
+		}
+		if XSciAnthropicSurface(c) { // [OXSCI] P160 T9: one standard error frame, marked as the answer
+			xsciWriteStreamFailure(c, reason, message)
+			return
 		}
 		body, err := json.Marshal(map[string]any{
 			"type": "error",

@@ -19,11 +19,15 @@ import (
 )
 
 // keyAvailabilityResponse is the body of GET /v1/sub2api/availability.
-// RetryAfterSeconds is only present when available is false and the gateway
-// knows when the first account comes back.
+// When available is false, Code says why, with the same error.code a request
+// would get (docs/xsci-client-error-contract.md): no_available_accounts (come
+// back later; RetryAfterSeconds when the gateway knows when the first account
+// comes back) or model_unsupported (no account of the group can serve the
+// model; waiting does not help).
 type keyAvailabilityResponse struct {
-	Available         bool `json:"available"`
-	RetryAfterSeconds *int `json:"retry_after_s,omitempty"`
+	Available         bool   `json:"available"`
+	Code              string `json:"code,omitempty"`
+	RetryAfterSeconds *int   `json:"retry_after_s,omitempty"`
 }
 
 // KeyAvailability answers "would a request with this key and model find an
@@ -75,13 +79,24 @@ func (h *GatewayHandler) KeyAvailability(c *gin.Context) {
 		return
 	}
 
+	if model != "" {
+		// Same verdicts as a request: no account configured for the model, or
+		// every configured account answered "model not found" (P160 T9).
+		cls := classifyNoAccountError(ctx, h.gatewayService, apiKey, model, model, platform)
+		if cls.ModelNotFound || (platform == service.PlatformAnthropic &&
+			h.gatewayService.XSciModelNotFoundOnEveryAccount(ctx, apiKey.GroupID, model, platform)) {
+			c.JSON(http.StatusOK, keyAvailabilityResponse{Available: false, Code: service.XSciCodeModelUnsupported})
+			return
+		}
+	}
+
 	at, known, err := h.gatewayService.EarliestRecoveryForPlatform(ctx, apiKey.GroupID, model, platform)
 	if err != nil {
 		reqLog.Error("gateway.availability_recovery_failed", zap.Error(err))
 		h.errorResponse(c, http.StatusInternalServerError, "api_error", "Availability check failed")
 		return
 	}
-	resp := keyAvailabilityResponse{Available: false}
+	resp := keyAvailabilityResponse{Available: false, Code: service.XSciCodeNoAvailableAccounts}
 	if known {
 		seconds := service.RetryAfterSeconds(at, time.Now())
 		resp.RetryAfterSeconds = &seconds
