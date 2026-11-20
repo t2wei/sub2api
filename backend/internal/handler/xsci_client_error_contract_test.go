@@ -197,6 +197,41 @@ func ceModelNotFoundCooling(e *ceEnv) {
 	}
 }
 
+// ceServedLately: the group served the model in the last 7 days (a usage log
+// row), so only the strict model_unsupported verdict applies.
+func ceServedLately(e *ceEnv) { e.served[ceModel] = true }
+
+// ceRateLimitedAccount adds an account of the group that is rate-limited for
+// the next 3 hours (an upstream usage window, the state of 8 of the 13
+// ANT-team accounts in P160 #174).
+func ceRateLimitedAccount(e *ceEnv, id int64) *service.Account {
+	a := e.setupTokenAccount(id)
+	reset := time.Now().Add(3 * time.Hour)
+	a.RateLimitResetAt = &reset
+	e.accounts = append(e.accounts, a)
+	return a
+}
+
+// ceOneNotFoundRestLimited: the first account is cooling the model down because
+// it answered "model not found" earlier; the other one is rate-limited (never
+// tried).
+func ceOneNotFoundRestLimited(e *ceEnv) {
+	e.accounts[0].Extra = ceWithModelRateLimit(nil, ceModel, time.Now().Add(20*time.Minute), "upstream_404_model_not_found")
+	ceRateLimitedAccount(e, 9714)
+}
+
+// ceUntouched asserts that the verdict wrote nothing to an untried account.
+func ceUntouched(t *testing.T, a *service.Account, rateLimitedUntil *time.Time) {
+	t.Helper()
+	_, cooled := a.Extra["model_rate_limits"]
+	require.False(t, cooled, "account %d was not tried: no model cooldown", a.ID)
+	require.Equal(t, rateLimitedUntil, a.RateLimitResetAt, "account %d: its rate limit is unchanged", a.ID)
+	require.Nil(t, a.OverloadUntil, "account %d", a.ID)
+	require.Nil(t, a.TempUnschedulableUntil, "account %d", a.ID)
+	require.Equal(t, service.StatusActive, a.Status, "account %d", a.ID)
+	require.True(t, a.Schedulable, "account %d", a.ID)
+}
+
 // ceDirectContext is a recorder + gin context for a closest-function drive,
 // with the contract layer switched on as the route middleware does.
 func ceDirectContext() (*httptest.ResponseRecorder, *gin.Context) {
@@ -433,10 +468,18 @@ var ceContract = []ceRow{
 	{ID: "E-POOL-EXHAUSTED", Class: ceClassGateway, HTTP: "503", Body: ceBodyEnvelope, Type: "api_error", Code: "no_available_accounts",
 		Message: "No available accounts: {reason}", Stream: ceStreamJSONFrame, RetryAfter: ceWhenKnown,
 		drives: []ceDrive{
-			{name: "every account rate-limited", env: func(e *ceEnv) {
+			{name: "every account rate-limited, none tried", env: func(e *ceEnv) {
 				reset := time.Now().Add(10 * time.Minute)
 				e.accounts[0].RateLimitResetAt = &reset
-			}, req: ceStream(), want: ceWant{status: 503, form: ceFormJSON, message: "No available accounts: no available accounts", retryAfter: "any"}},
+			}, req: ceStream(), want: ceWant{status: 503, form: ceFormJSON, message: "No available accounts: no available accounts", retryAfter: "any"},
+				check: func(t *testing.T, e *ceEnv, _ *httptest.ResponseRecorder) {
+					require.Zero(t, e.servedLookups.Load(), "no account answered model not found: no usage lookup")
+				}},
+			{name: "served in 7 days: one account cooling it (model not found), the rest rate-limited", env: func(e *ceEnv) {
+				ceServedLately(e)
+				ceOneNotFoundRestLimited(e)
+			}, want: ceWant{status: 503, form: ceFormJSON, message: "No available accounts: no available accounts", retryAfter: "any"},
+				check: func(t *testing.T, e *ceEnv, _ *httptest.ResponseRecorder) { require.Zero(t, e.upstream.calls) }},
 			{name: "model cooling down for another reason", env: func(e *ceEnv) {
 				e.accounts[0].Extra = ceWithModelRateLimit(nil, ceModel, time.Now().Add(10*time.Minute), "upstream_429_model_rate_limited")
 			}, want: ceWant{status: 503, form: ceFormJSON, message: "No available accounts: no available accounts", retryAfter: "any"}},
@@ -478,6 +521,7 @@ var ceContract = []ceRow{
 						ceAssert(t, ceModelUnsupportedRow, ceWant{status: 404, form: ceFormJSON, message: ceModelNotFoundSonet}, next)
 					}
 					require.Equal(t, 2, e.upstream.calls, "the cooled model is not sent upstream again")
+					require.Zero(t, e.servedLookups.Load(), "every account answered: no usage lookup")
 				}},
 			{name: "stream request", env: func(e *ceEnv) { e.reply(ceJSON(404, ceUp404)) }, req: ceStream(),
 				want: ceWant{status: 404, form: ceFormJSON, message: ceModelNotFoundSonet,
@@ -491,6 +535,73 @@ var ceContract = []ceRow{
 			{name: "model cooling on every account, stream", env: ceModelNotFoundCooling, req: ceStream(),
 				want: ceWant{status: 404, form: ceFormJSON, message: ceModelNotFoundSonet}},
 			{name: "model cooling on every account, count_tokens", env: ceModelNotFoundCooling, req: ceCountTokens(),
+				want: ceWant{status: 404, form: ceFormJSON, message: ceModelNotFoundSonet}},
+
+			// Not served in 7 days: the accounts tried are enough (P160 Q6 A).
+			{name: "not served in 7 days: accounts tried answered model not found, the rest rate-limited (P160 #174)", env: func(e *ceEnv) {
+				ceSecondAccount(e)
+				ceRateLimitedAccount(e, 9714)
+				ceRateLimitedAccount(e, 9715)
+				e.reply(ceJSON(404, ceUp404))
+			}, want: ceWant{status: 404, form: ceFormJSON, message: ceModelNotFoundSonet, upstream: &ceUpWant{status: 404, errType: "not_found_error", message: "model: claude-sonnet-5", requestID: "req_011CUp404"}},
+				check: func(t *testing.T, e *ceEnv, _ *httptest.ResponseRecorder) {
+					require.Equal(t, 2, e.upstream.calls, "the two selectable accounts were tried")
+					limited := []*service.Account{e.accounts[2], e.accounts[3]}
+					until := []*time.Time{limited[0].RateLimitResetAt, limited[1].RateLimitResetAt}
+					for i, a := range limited {
+						ceUntouched(t, a, until[i])
+					}
+					// Next requests while the cooldown lasts: same code, no upstream call.
+					for _, req := range []ceRequest{{}, {stream: true}, ceCountTokens()} {
+						ceAssert(t, ceModelUnsupportedRow, ceWant{status: 404, form: ceFormJSON, message: ceModelNotFoundSonet}, e.do(req))
+					}
+					probe := e.do(ceRequest{method: http.MethodGet, path: "/v1/sub2api/availability", query: "model=" + ceModel})
+					require.JSONEq(t, `{"available":false,"code":"model_unsupported"}`, probe.Body.String())
+					require.Equal(t, 2, e.upstream.calls, "nothing sent upstream while the cooldown lasts")
+					for i, a := range limited {
+						ceUntouched(t, a, until[i])
+					}
+					// A rate-limited account recovers: the next request reaches it.
+					limited[0].RateLimitResetAt = nil
+					ceAssert(t, ceModelUnsupportedRow, ceWant{status: 404, form: ceFormJSON, message: ceModelNotFoundSonet,
+						upstream: &ceUpWant{status: 404, errType: "not_found_error", message: "model: claude-sonnet-5", requestID: "req_011CUp404"}}, e.do(ceRequest{}))
+					require.Equal(t, 3, e.upstream.calls, "the recovered account was tried")
+				}},
+			{name: "not served in 7 days: accounts tried, stream", env: func(e *ceEnv) { ceRateLimitedAccount(e, 9714); e.reply(ceJSON(404, ceUp404)) }, req: ceStream(),
+				want: ceWant{status: 404, form: ceFormJSON, message: ceModelNotFoundSonet, upstream: &ceUpWant{status: 404, errType: "not_found_error", message: "model: claude-sonnet-5", requestID: "req_011CUp404"}}},
+			{name: "not served in 7 days: accounts tried, after ping", env: func(e *ceEnv) {
+				ceRateLimitedAccount(e, 9714)
+				cePingFirst(e)
+				e.reply(ceJSON(404, ceUp404))
+			}, req: ceStream(), want: ceWant{status: 200, form: ceFormFrame, message: ceModelNotFoundSonet, upstream: &ceUpWant{status: 404, errType: "not_found_error", message: "model: claude-sonnet-5", requestID: "req_011CUp404"}}},
+			{name: "not served in 7 days: switch budget ran out, one account untried", env: func(e *ceEnv) {
+				ceSecondAccount(e)
+				e.accounts = append(e.accounts, e.setupTokenAccount(9713))
+				e.maxSwitches = 1
+				e.reply(ceJSON(404, ceUp404))
+			}, want: ceWant{status: 404, form: ceFormJSON, message: ceModelNotFoundSonet, upstream: &ceUpWant{status: 404, errType: "not_found_error", message: "model: claude-sonnet-5", requestID: "req_011CUp404"}},
+				check: func(t *testing.T, e *ceEnv, _ *httptest.ResponseRecorder) {
+					require.Equal(t, 2, e.upstream.calls)
+					var untried []*service.Account
+					for _, a := range e.accounts {
+						if _, cooled := a.Extra["model_rate_limits"]; !cooled {
+							untried = append(untried, a)
+						}
+					}
+					require.Len(t, untried, 1, "two accounts tried (either two of the three)")
+					ceUntouched(t, untried[0], nil)
+				}},
+			{name: "not served in 7 days: one account cooling it, the rest rate-limited", env: ceOneNotFoundRestLimited,
+				want: ceWant{status: 404, form: ceFormJSON, message: ceModelNotFoundSonet},
+				check: func(t *testing.T, e *ceEnv, _ *httptest.ResponseRecorder) {
+					require.Zero(t, e.upstream.calls)
+					require.Equal(t, int32(1), e.servedLookups.Load())
+				}},
+			{name: "not served in 7 days: one account cooling it, stream", env: ceOneNotFoundRestLimited, req: ceStream(),
+				want: ceWant{status: 404, form: ceFormJSON, message: ceModelNotFoundSonet}},
+			{name: "not served in 7 days: one account cooling it, after ping", env: func(e *ceEnv) { ceOneNotFoundRestLimited(e); cePingFirst(e) }, req: ceStream(),
+				want: ceWant{status: 200, form: ceFormFrame, message: ceModelNotFoundSonet}},
+			{name: "not served in 7 days: one account cooling it, count_tokens", env: ceOneNotFoundRestLimited, req: ceCountTokens(),
 				want: ceWant{status: 404, form: ceFormJSON, message: ceModelNotFoundSonet}},
 		}},
 
@@ -612,7 +723,8 @@ var ceContract = []ceRow{
 			{name: "local failure before forwarding", env: func(e *ceEnv) { e.accounts[0].Credentials = map[string]any{} },
 				want:  ceWant{status: 502, form: ceFormJSON},
 				check: func(t *testing.T, e *ceEnv, _ *httptest.ResponseRecorder) { require.Zero(t, e.upstream.calls) }},
-			{name: "model not found on the accounts tried, others untried", env: func(e *ceEnv) {
+			{name: "served in 7 days: model not found on the accounts tried, one untried", env: func(e *ceEnv) {
+				ceServedLately(e)
 				ceSecondAccount(e)
 				e.accounts = append(e.accounts, e.setupTokenAccount(9713))
 				e.maxSwitches = 1
@@ -620,6 +732,27 @@ var ceContract = []ceRow{
 			}, want: ceWant{status: 502, form: ceFormJSON, upstream: &ceUpWant{status: 404, errType: "not_found_error", message: "model: claude-sonnet-5", requestID: "req_011CUp404"}},
 				check: func(t *testing.T, e *ceEnv, _ *httptest.ResponseRecorder) {
 					require.Equal(t, 2, e.upstream.calls, "the switch budget ran out with one account untried")
+				}},
+			{name: "served in 7 days: model not found on the accounts tried, the rest rate-limited", env: func(e *ceEnv) {
+				ceServedLately(e)
+				ceSecondAccount(e)
+				ceRateLimitedAccount(e, 9714)
+				e.reply(ceJSON(404, ceUp404))
+			}, want: ceWant{status: 502, form: ceFormJSON, upstream: &ceUpWant{status: 404, errType: "not_found_error", message: "model: claude-sonnet-5", requestID: "req_011CUp404"}},
+				check: func(t *testing.T, e *ceEnv, _ *httptest.ResponseRecorder) {
+					require.Equal(t, 2, e.upstream.calls)
+					// The next request finds nothing selectable: busy, not model_unsupported.
+					next := e.do(ceRequest{})
+					require.Equal(t, http.StatusServiceUnavailable, next.Code, next.Body.String())
+					require.Contains(t, next.Body.String(), `"code":"no_available_accounts"`)
+				}},
+			{name: "not served in 7 days: an account tried answered something else", env: func(e *ceEnv) {
+				ceSecondAccount(e)
+				e.reply(ceJSON(500, ceUp500), ceJSON(404, ceUp404))
+			}, want: ceWant{status: 502, form: ceFormJSON, upstream: &ceUpWant{status: 404, errType: "not_found_error", message: "model: claude-sonnet-5", requestID: "req_011CUp404"}},
+				check: func(t *testing.T, e *ceEnv, _ *httptest.ResponseRecorder) {
+					require.Equal(t, 2, e.upstream.calls, "one account answered 500, the other model not found")
+					require.Zero(t, e.servedLookups.Load(), "not every answer was model not found: no usage lookup")
 				}},
 			{name: "local failure, after ping", env: func(e *ceEnv) { e.accounts[0].Credentials = map[string]any{}; cePingFirst(e) }, req: ceStream(),
 				want: ceWant{status: 200, form: ceFormFrame}},
@@ -988,6 +1121,10 @@ func TestXSciAvailabilityAgreesWithContract(t *testing.T) {
 			reset := time.Now().Add(10 * time.Minute)
 			e.accounts[0].RateLimitResetAt = &reset
 		}, map[string]any{"available": false, "code": service.XSciCodeNoAvailableAccounts, "retry_after_s": "any"}},
+		{"not served in 7 days: one account cooling it (model not found), the rest rate-limited", ceOneNotFoundRestLimited,
+			map[string]any{"available": false, "code": service.XSciCodeModelUnsupported}},
+		{"served in 7 days: one account cooling it (model not found), the rest rate-limited", func(e *ceEnv) { ceServedLately(e); ceOneNotFoundRestLimited(e) },
+			map[string]any{"available": false, "code": service.XSciCodeNoAvailableAccounts, "retry_after_s": "any"}},
 	}
 	for _, tc := range cases {
 		tc := tc
@@ -1098,4 +1235,21 @@ func TestXSciClientErrorContractMatchesDoc(t *testing.T) {
 	sort.Strings(sortedGo)
 	sort.Strings(semIDs)
 	require.Equal(t, sortedGo, semIDs, "doc §3 explains every row of §2")
+}
+
+// TestXSciModelServedLookupOnlyOnFailure: the usage lookup of the
+// model_unsupported verdict never runs for a request that succeeds.
+func TestXSciModelServedLookupOnlyOnFailure(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	e := newCEEnv(t)
+	ceRateLimitedAccount(e, 9714)
+	e.reply(ceReply{status: 200, body: ceStreamStart +
+		"event: content_block_stop\n" + `data: {"type":"content_block_stop","index":0}` + "\n\n" +
+		"event: message_delta\n" + `data: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":2}}` + "\n\n" +
+		"event: message_stop\n" + `data: {"type":"message_stop"}` + "\n\n"})
+	rec := e.do(ceStream())
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	require.Contains(t, rec.Body.String(), "message_stop")
+	require.Equal(t, 1, e.upstream.calls)
+	require.Zero(t, e.servedLookups.Load())
 }

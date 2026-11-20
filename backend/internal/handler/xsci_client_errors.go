@@ -69,7 +69,7 @@ func (h *GatewayHandler) xsciFailoverExhausted(c *gin.Context, fe *service.Upstr
 	}
 	modelUnsupported := false
 	if service.XSciIsUpstreamModelNotFound(fe) && h.gatewayService != nil {
-		modelUnsupported = h.gatewayService.XSciModelNotFoundOnEveryAccount(c.Request.Context(), groupID, model, platform)
+		modelUnsupported = h.gatewayService.XSciModelUnsupported(c.Request.Context(), groupID, model, platform, service.XSciTriedAnswersOf(c))
 	}
 	e := service.XSciFailoverAnswer(fe, modelUnsupported, model)
 
@@ -113,10 +113,12 @@ func xsciRequestModel(c *gin.Context) string {
 }
 
 // xsciModelNotFoundEverywhere turns "no account available" into
-// model_unsupported (404) when every account of the group configured for the
-// model is cooling it down because the upstream answered "model not found".
-// Without this the pool reads as busy (503 + Retry-After) for the length of
-// the cooldown although no account can serve the model.
+// model_unsupported (404) when the accounts of the group answered "model not
+// found" for the model (service.XSciModelUnsupported: every configured account
+// is cooling the model down for that reason, or — for a model the group did
+// not serve in the last 7 days — the ones tried did and the rest are not
+// selectable now). Without this the pool reads as busy (503 + Retry-After)
+// although no account can serve the model.
 func xsciModelNotFoundEverywhere(
 	c *gin.Context,
 	ctx context.Context,
@@ -129,9 +131,9 @@ func xsciModelNotFoundEverywhere(
 		return cls
 	}
 	svc, ok := diag.(interface {
-		XSciModelNotFoundOnEveryAccount(context.Context, *int64, string, string) bool
+		XSciModelUnsupported(context.Context, *int64, string, string, service.XSciTriedAnswers) bool
 	})
-	if !ok || !svc.XSciModelNotFoundOnEveryAccount(ctx, apiKey.GroupID, routingModel, platform) {
+	if !ok || !svc.XSciModelUnsupported(ctx, apiKey.GroupID, routingModel, platform, service.XSciTriedAnswersOf(c)) {
 		return cls
 	}
 	if strings.TrimSpace(displayModel) == "" {

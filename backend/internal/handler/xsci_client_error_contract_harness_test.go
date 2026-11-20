@@ -20,6 +20,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -423,6 +424,25 @@ func (r *ceUserSubRepo) GetActiveByUserIDAndGroupID(context.Context, int64, int6
 	return &clone, nil
 }
 
+// ceUsageRepo is the usage log: rows are accepted and dropped; the served
+// lookup of the model_unsupported verdict answers from env.served and counts
+// its calls in env.servedLookups.
+type ceUsageRepo struct {
+	*openAIWSUsageHandlerUsageLogRepoStub
+	env *ceEnv
+}
+
+func (r *ceUsageRepo) XSciGroupServedModelSince(_ context.Context, groupID int64, model string, since time.Time) (bool, error) {
+	r.env.servedLookups.Add(1)
+	if groupID != ceGroupID {
+		return false, errors.New("contract: served lookup for another group")
+	}
+	if window := time.Since(since); window < 7*24*time.Hour-time.Minute || window > 7*24*time.Hour+time.Minute {
+		return false, errors.New("contract: served lookup window is not 7 days")
+	}
+	return r.env.served[model], nil
+}
+
 // ceEnv is one request's world: key, user, group, accounts, settings, rules
 // and the scripted upstream.
 type ceEnv struct {
@@ -442,6 +462,10 @@ type ceEnv struct {
 	pingEvery   time.Duration
 	maxSwitches int
 	accountRepo *ceAccountRepo
+	// served lists the models the group served in the last 7 days (usage
+	// log); none by default.
+	served        map[string]bool
+	servedLookups atomic.Int32
 }
 
 func newCEEnv(t *testing.T) *ceEnv {
@@ -465,6 +489,7 @@ func newCEEnv(t *testing.T) *ceEnv {
 	e := &ceEnv{
 		t: t, cfg: cfg, group: group, user: user, key: key,
 		settings:    map[string]string{},
+		served:      map[string]bool{},
 		upstream:    &ceUpstream{},
 		conc:        &ceConcurrencyCache{},
 		billing:     newCEBillingCache(100),
@@ -538,7 +563,7 @@ func (e *ceEnv) router() (*gin.Engine, *GatewayHandler) {
 	concurrencySvc := service.NewConcurrencyService(e.conc)
 	rateLimitSvc := service.NewRateLimitService(e.accountRepo, nil, cfg, nil, nil)
 	snapshot := service.NewSchedulerSnapshotService(&fakeSchedulerCache{accounts: e.accounts}, nil, nil, nil, nil)
-	usageRepo := &openAIWSUsageHandlerUsageLogRepoStub{created: make(chan *service.UsageLog, 8)}
+	usageRepo := &ceUsageRepo{openAIWSUsageHandlerUsageLogRepoStub: &openAIWSUsageHandlerUsageLogRepoStub{created: make(chan *service.UsageLog, 8)}, env: e}
 	gw := service.NewGatewayService(
 		e.accountRepo, &groupMapRepo{fakeGroupRepo: &fakeGroupRepo{group: e.group}, groups: map[int64]*service.Group{e.group.ID: e.group}},
 		usageRepo, &compatStreamUsageBillingRepo{}, nil, nil, nil, nil, cfg,

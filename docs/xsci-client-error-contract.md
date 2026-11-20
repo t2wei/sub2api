@@ -14,8 +14,9 @@ every row is driven through the real code path and checked against what the
 client receives, and the test fails if this document's §2 table and the test's
 row table differ in any cell. See §8 before changing either.
 
-Build: `oxsci-custom-v3` after 327cf8ae8 (upstream v0.2.23 + OxSci commits),
-P160 T9 rework.
+Build: `oxsci-custom-v3` after 5a05227e7 (upstream v0.2.23 + OxSci commits):
+P160 T9 rework, and `model_unsupported` for a model the group did not serve in
+the last 7 days (P160 Q6).
 
 ## 1. How an error looks on the wire
 
@@ -241,9 +242,9 @@ for 2026-11-12 15:54Z – 11-19 15:54Z under the build before this contract
 | E-LIMIT-ACCOUNT-CONCURRENCY | Every candidate account stayed busy past the account wait timeout. | yes | yes | | — |
 | E-LIMIT-QUEUE-FULL | Too many requests are already waiting for the user's or the account's slots; answered at once. | yes | yes | | 182 |
 | E-LIMIT-SLOT-ERROR | The concurrency store (Redis) failed. | maybe | yes | | 7 |
-| E-POOL-EXHAUSTED | No account of the group can take the model now (rate-limited, overloaded, temporarily unschedulable, cooling the model down for a reason other than "model not found", or none schedulable). | yes, later | yes | Retry-After (OxSci) = seconds until the first account becomes selectable, when sub2api knows it; same estimate as `GET /v1/sub2api/availability`. `{reason}` is `no available accounts` with the default scheduler. It can also follow upstream errors: after an upstream 503 sub2api waits 2 s, forgets which accounts it already tried and selects again; if by then every account is cooling down, this row is the answer. | 7515 |
+| E-POOL-EXHAUSTED | No account of the group can take the model now (rate-limited, overloaded, temporarily unschedulable, cooling the model down for a reason other than "model not found", or none schedulable). Also when some accounts are cooling the model down for "model not found" and the others cannot be selected, for a model the group served in the last 7 days (otherwise `E-UP-MODEL-NOT-FOUND`). | yes, later | yes | Retry-After (OxSci) = seconds until the first account becomes selectable, when sub2api knows it; same estimate as `GET /v1/sub2api/availability`. `{reason}` is `no available accounts` with the default scheduler. It can also follow upstream errors: after an upstream 503 sub2api waits 2 s, forgets which accounts it already tried and selects again; if by then every account is cooling down, this row is the answer. | 7515 |
 | E-POOL-MODEL-UNSUPPORTED | The group has accounts, but none is configured for the model (model mapping / whitelist). | no | no | Another model may be served. Also on count_tokens. | — |
-| E-UP-MODEL-NOT-FOUND | Every account of the group configured for the model answered the upstream's "model not found" (404 `not_found_error`, `model: …`): in this request (failover tried them all; `error.upstream` is the last answer), or earlier, while the model's cooldown on each of them lasts (30 min; no upstream call, no `error.upstream`). | no | no — the cooldown only spares upstream calls | Another model may be served. Same code and text as `E-POOL-MODEL-UNSUPPORTED`; `error.upstream` tells the two apart. Also on count_tokens and in `GET /v1/sub2api/availability` (`code: model_unsupported`). Until P160 T9 the first request was `502 Upstream request failed` and the next ones `503 No available accounts` + Retry-After for the length of the cooldown. | — |
+| E-UP-MODEL-NOT-FOUND | Accounts of the group answered the upstream's "model not found" (404 `not_found_error`, `model: …`) for the model, in this request (failover ran out on them; `error.upstream` is the last answer) or earlier, while the model's cooldown on the account lasts (30 min; no upstream call, no `error.upstream`). Which accounts must have answered depends on whether the group served the model in the last 7 days (a usage log row with that requested model). **Served**: every account of the group configured for the model. **Not served**: the accounts that were tried, at least one — every failover answer of this request was "model not found", or (nothing tried now) an account is cooling the model down for that reason and no other account can be selected. Accounts not tried — rate-limited, overloaded, beyond the switch budget — do not hold a not-served model back. | no | no — the cooldown only spares upstream calls | Another model may be served. Same code and text as `E-POOL-MODEL-UNSUPPORTED`; `error.upstream` tells the two apart. Also on count_tokens and in `GET /v1/sub2api/availability` (`code: model_unsupported`). Nothing is written to the accounts not tried: once they recover they are selected for the model again, so a not-served model that one of them does have is found then (and, served from then on, is judged by every account). The usage lookup runs only here, after the request failed (cached per group and model: 10 min served, 1 min not served). Until P160 T9 the first request was `502 Upstream request failed` and the next ones `503 No available accounts` + Retry-After for the length of the cooldown; until P160 Q6 that was still the answer whenever an account of the group had not been tried (P160 #174: 8 of 13 accounts rate-limited). | — |
 | E-UP-400 | The upstream rejected the request with 400 (invalid parameter, model id not valid on that upstream, client too old for the model, …). | no | no | No failover. sub2api first retries silently on thinking-signature and thinking-budget 400s. Account-level 400s (credit balance too low, organization disabled, identity verification) are not this row: they take the account out and fail over (`E-UP-ACCOUNT`). | 31 |
 | E-UP-4XX | The first account answered another 4xx for the request (404 not about the model, 405, 409, 413, 422, …): no failover. Also a 4xx an API-key account with custom error codes kept giving when retried on the same account (5 tries / 10 s). | no | no | The upstream's status and body as they are. 401 / 402 / 403 never come back this way (`E-UP-ACCOUNT`). | part of the old E-UP-OTHER's 18 |
 | E-UP-REQUEST-429 | An Anthropic subscription account answered 429 `rate_limit_error` "Error" with no rate-limit window headers: Anthropic rejected this request, not the account (P160 T3). | no — every account gives the same answer | not observed | No failover; the account is not marked. | in E-UP-429's 66 |
@@ -252,7 +253,7 @@ for 2026-11-12 15:54Z – 11-19 15:54Z under the build before this contract
 | E-UP-529 | Every tried account was overloaded (HTTP 529, or an `overloaded_error` event before any output). | yes, later | yes | Overloaded accounts cool down (prod: 10 min). Status 529 since P160 T9 (was 503). | — |
 | E-UP-5XX | Every tried account answered 500 / 502 / 503 / 504 (or another 5xx), the connection failed, or the stream broke before its first byte. | yes | maybe | A broken stream is retried on the same account first. `error.upstream` only when an upstream answered. | 4 |
 | E-UP-ACCOUNT | Failover ran out on answers about the accounts themselves: upstream 401 / 403 (the account's credential or permission), 402, or an account-level 400 (credit balance too low, organization disabled, identity verification). Also count_tokens getting such an answer. | no | an admin has to act | Never 401 / 403 to the client: the caller's key is fine (Claude Code would ask to log in again). `error.upstream` has status, type and request id, no message. Subscription accounts retry a 403 on the same account first (up to 5 tries / 10 s). | — |
-| E-UP-REQUEST-FAILED | The request could not be completed and no row above applies: a local failure before or while forwarding (no credential, request build), or failover ran out on an answer without its own row (e.g. "model not found" on the accounts tried while an account of the group was not tried). | maybe | maybe | `error.upstream` when an upstream answered. | part of the old E-UP-OTHER's 18 |
+| E-UP-REQUEST-FAILED | The request could not be completed and no row above applies: a local failure before or while forwarding (no credential, request build), or failover ran out on an answer without its own row (e.g. "model not found" on the accounts tried while an account of the group was not tried, for a model the group served in the last 7 days; or "model not found" from some accounts tried and another answer from the others). | maybe | maybe | `error.upstream` when an upstream answered. | part of the old E-UP-OTHER's 18 |
 | E-UP-PASSTHROUGH-RULE | An admin error-passthrough rule matched the last upstream answer once failover ran out (§5). | per rule | — | Status and message as the rule says (status kept, or the rule's code; upstream text or the rule's text); `error.type` is the standard type of that status; `error.upstream` attached. Rules never change (a) answers. | — |
 | E-STREAM-UPSTREAM-ERROR | The upstream sent `event: error` after output had started (`Overloaded`, `api_error`, content filter, …); or before any output with a type other than `overloaded_error`, and every account tried gave such an event. | Overloaded / api_error: yes; content filter: no | — | Forwarded as the upstream sent it, in the 200 stream. No failover once output started; before output it fails over first. | 7 |
 | E-STREAM-DISCONNECTED | The upstream connection broke after output started. | yes | — | `{reason}`: `connection reset by peer`, `unexpected EOF`, `EOF`, `… timeout`, `upstream connection error`, …. One frame (until P160 T9 a second, generic frame followed). | 3 |
@@ -278,13 +279,14 @@ for 2026-11-12 15:54Z – 11-19 15:54Z under the build before this contract
   logs and for finer decisions, not instead of the code.
 - `GET /v1/sub2api/availability?model=…` answers `{"available":false,"code":…}`
   with the code a request would get now: `no_available_accounts` (with
-  `retry_after_s` when known) or `model_unsupported`.
+  `retry_after_s` when known) or `model_unsupported`. The probe sends nothing
+  upstream; it reads the "model not found" answers accounts already gave.
 
 | Codes | Meaning | What helps |
 |---|---|---|
 | `gateway_concurrency_limit`, `gateway_queue_full`, `gateway_concurrency_unavailable`, `no_available_accounts`, `upstream_rate_limited`, `upstream_overloaded`, `upstream_unavailable`, `upstream_stream_incomplete`, `stream_read_error`, `stream_timeout`, `request_body_buffer_full`, `request_body_timeout`, `API_KEY_AUTH_OVERLOADED`, `BILLING_SERVICE_ERROR`, `INVALID_AUTH_RATE_LIMITED` | Capacity or a transient failure, in sub2api or upstream. | Wait and retry the same request (Retry-After when sent). |
 | `USER_RPM_EXCEEDED`, `GROUP_RPM_EXCEEDED`, `USER_PLATFORM_*_QUOTA_EXHAUSTED`, `API_KEY_RATE_*_EXCEEDED`, `USAGE_LIMIT_EXCEEDED` | A usage window of this key / user / subscription is full. | Wait for the window (Retry-After when sent: next minute / quota reset); retrying sooner fails the same way. |
-| `model_unsupported`, `model_not_allowed` | No account of this group can serve this model (not configured, the upstream does not know it, or the group's allowlist excludes it). Waiting does not help. | Another model. |
+| `model_unsupported`, `model_not_allowed` | No account of this group can serve this model (not configured; the upstream does not know it — for a model the group did not serve in the last 7 days, on the accounts tried; or the group's allowlist excludes it). Waiting does not help. | Another model. |
 | `upstream_account_error`, `INSUFFICIENT_BALANCE`, `API_KEY_QUOTA_EXHAUSTED`, `BILLING_ERROR`, `SUBSCRIPTION_NOT_FOUND`, `SUBSCRIPTION_INVALID`, `API_KEY_REQUIRED`, `INVALID_API_KEY`, `API_KEY_DISABLED`, `API_KEY_EXPIRED`, `USER_INACTIVE`, `ACCESS_DENIED`, `GROUP_DELETED`, `GROUP_DISABLED`, `GROUP_NOT_ALLOWED`, `group_unassigned` | The key, its user, its group, its money or the upstream accounts behind it are not usable. | An admin. Not retrying, not another model. |
 | `api_key_in_query_deprecated`, `request_body_too_large`, `request_body_unreadable`, `request_body_empty`, `request_body_invalid`, `model_required`, `model_parameters_unsupported` | The request itself is wrong. | Change the request. |
 | `count_tokens_unsupported` | count_tokens cannot be answered by the selected account. | Count locally. |
@@ -320,8 +322,11 @@ no `block` rule; error-passthrough rules: rule 1 only; the Anthropic accounts
 have no pool mode and no custom error codes (P160 T3). Config defaults for the
 rest (`gateway.scheduling.load_batch_enabled`, `gateway.max_account_switches`,
 the invalid-auth limiter, the ping interval). The "model not found" cooldown
-is 30 minutes (code constant `upstreamModelNotFoundCooldown`). A change to any
-of these can add or change rows; check §7.
+is 30 minutes (code constant `upstreamModelNotFoundCooldown`). The served window
+of `E-UP-MODEL-NOT-FOUND` is 7 days (`xsciModelServedWindow`), read from the
+usage log by group and requested model (the expression of index
+`idx_usage_logs_effective_requested_model_created`). A change to any of these
+can add or change rows; check §7.
 
 ## 7. Not covered
 
@@ -357,7 +362,9 @@ and `backend/internal/handler/xsci_client_errors.go`, switched on per request by
 the route middleware `handler.XSciClientErrorContract` (first on `/v1`, and
 wrapped around the root `/messages/count_tokens` alias). Upstream functions
 reach it through one-line `[OXSCI] P160 T9` hooks; requests without the mark
-(other paths, upstream's own unit tests) keep upstream's behaviour.
+(other paths, upstream's own unit tests) keep upstream's behaviour. The
+`model_unsupported` verdict is `GatewayService.XSciModelUnsupported` (same
+file); its usage lookup is `backend/internal/repository/xsci_usage_log_served.go`.
 
 A change to what a client sees (status, body, `error.type`, `error.code`,
 message, `error.upstream`, frame, Retry-After) on these endpoints — our own
@@ -386,9 +393,12 @@ API-key auth, group model allowlist, group assignment; the composite-group
 rewrite is left out, a no-op for anthropic groups), a real `GatewayHandler` and
 `GatewayService`, a scripted upstream, and in-memory repositories (account
 state writes — rate limits, model cooldowns — land on the in-memory accounts,
-as the database write does on prod), and sends one HTTP request per drive.
-`E-UP-MODEL-NOT-FOUND` also sends the follow-up requests of the same client to
-show the cooled model answers the same without reaching the upstream.
+as the database write does on prod; a usage log whose served lookup answers
+from the drive's list, empty unless the drive marks the model served), and
+sends one HTTP request per drive. `E-UP-MODEL-NOT-FOUND` also sends the
+follow-up requests of the same client to show the cooled model answers the
+same without reaching the upstream, and, for P160 #174, that the accounts not
+tried are left as they were and are tried again once they recover.
 
 Driven at the closest function instead, because the real path needs state a
 unit test cannot set cheaply:

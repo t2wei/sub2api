@@ -81,10 +81,11 @@ func (h *GatewayHandler) KeyAvailability(c *gin.Context) {
 
 	if model != "" {
 		// Same verdicts as a request: no account configured for the model, or
-		// every configured account answered "model not found" (P160 T9).
+		// the accounts answered "model not found" (P160 T9; nothing tried by
+		// the probe itself).
 		cls := classifyNoAccountError(ctx, h.gatewayService, apiKey, model, model, platform)
 		if cls.ModelNotFound || (platform == service.PlatformAnthropic &&
-			h.gatewayService.XSciModelNotFoundOnEveryAccount(ctx, apiKey.GroupID, model, platform)) {
+			h.gatewayService.XSciModelUnsupported(ctx, apiKey.GroupID, model, platform, service.XSciTriedAnswers{})) {
 			c.JSON(http.StatusOK, keyAvailabilityResponse{Available: false, Code: service.XSciCodeModelUnsupported})
 			return
 		}

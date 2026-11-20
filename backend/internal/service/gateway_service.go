@@ -885,6 +885,7 @@ type GatewayService struct {
 	tlsFPProfileService   *TLSFingerprintProfileService
 	balanceNotifyService  *BalanceNotifyService
 	userPlatformQuotaRepo UserPlatformQuotaRepository
+	xsciServedModels      xsciServedModelCache // [OXSCI] P160 T9: served-in-7-days lookups (xsci_client_errors.go)
 }
 
 // NewGatewayService creates a new GatewayService
