@@ -26,10 +26,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
@@ -614,28 +616,106 @@ func XSciIsUpstreamModelNotFound(fe *UpstreamFailoverError) bool {
 
 // ---- model unsupported across the group ----
 
-// XSciModelNotFoundOnEveryAccount reports whether every persistently enabled
-// account of the group that is configured for requestedModel is cooling the
-// model down because the upstream answered "model not found" for it
-// (upstreamModelNotFoundReason, HandleUpstreamModelNotFound). The scheduler
-// skips such an account for the model until the cooldown ends; when all of
-// them are, the model is unusable through this group, not just busy.
-func (s *GatewayService) XSciModelNotFoundOnEveryAccount(ctx context.Context, groupID *int64, requestedModel, platform string) bool {
+// A model the group served in the last xsciModelServedWindow keeps the strict
+// verdict; one it did not serve is judged by the accounts that were tried.
+const (
+	xsciModelServedWindow     = 7 * 24 * time.Hour
+	xsciModelServedTTL        = 10 * time.Minute // cache of "served"
+	xsciModelNotServedTTL     = time.Minute      // cache of "not served"
+	xsciModelServedTimeout    = 2 * time.Second
+	xsciModelServedCacheLimit = 1024
+)
+
+const xsciTriedAnswersKey = "xsci_tried_answers"
+
+// XSciModelServedLookup answers whether the group served the model (a usage
+// log row, i.e. a successful request, with that requested model) since a
+// time. The usage-log repository implements it; without it every model counts
+// as served (strict verdict only).
+type XSciModelServedLookup interface {
+	XSciGroupServedModelSince(ctx context.Context, groupID int64, model string, since time.Time) (bool, error)
+}
+
+// XSciTriedAnswers counts the failover answers of this request: upstream
+// "model not found" and anything else.
+type XSciTriedAnswers struct {
+	NotFound int
+	Other    int
+}
+
+// XSciNoteFailoverAnswer records one failover answer of this request (called
+// by the handler's failover loop for every UpstreamFailoverError).
+func XSciNoteFailoverAnswer(c *gin.Context, fe *UpstreamFailoverError) {
+	if fe == nil || !XSciAnthropicSurface(c) {
+		return
+	}
+	tried, _ := c.Get(xsciTriedAnswersKey)
+	t, ok := tried.(*XSciTriedAnswers)
+	if !ok {
+		t = &XSciTriedAnswers{}
+		c.Set(xsciTriedAnswersKey, t)
+	}
+	if XSciIsUpstreamModelNotFound(fe) {
+		t.NotFound++
+	} else {
+		t.Other++
+	}
+}
+
+// XSciTriedAnswersOf returns this request's failover answers so far.
+func XSciTriedAnswersOf(c *gin.Context) XSciTriedAnswers {
+	if c == nil {
+		return XSciTriedAnswers{}
+	}
+	if v, ok := c.Get(xsciTriedAnswersKey); ok {
+		if t, ok := v.(*XSciTriedAnswers); ok && t != nil {
+			return *t
+		}
+	}
+	return XSciTriedAnswers{}
+}
+
+// XSciModelUnsupported reports whether requestedModel cannot be served
+// through the group (model_unsupported, contract row E-UP-MODEL-NOT-FOUND).
+// Called only once a request (or the availability probe) already failed:
+//
+//  1. every persistently enabled account of the group configured for the
+//     model is cooling it down because the upstream answered "model not found"
+//     (upstreamModelNotFoundReason, HandleUpstreamModelNotFound); or
+//  2. the group has not served the model in the last 7 days and the accounts
+//     that were tried all answered "model not found", at least one: in this
+//     request (tried, failover ran out), or earlier while the cooldown lasts
+//     (a candidate cooling the model for that reason, nothing tried now).
+//     Accounts not tried — rate-limited, overloaded, beyond the switch budget
+//     — do not hold the verdict back, and nothing is written to them: they
+//     are selected again as soon as they recover.
+//
+// An answer other than "model not found" in this request leaves only verdict
+// 1. The usage lookup of verdict 2 runs only when verdict 1 does not hold
+// and the answers do, and is cached per group and model.
+func (s *GatewayService) XSciModelUnsupported(ctx context.Context, groupID *int64, requestedModel, platform string, tried XSciTriedAnswers) bool {
 	requestedModel = strings.TrimSpace(requestedModel)
 	if s == nil || requestedModel == "" {
 		return false
 	}
 	candidates, err := s.xsciModelCandidates(ctx, groupID, requestedModel, platform)
-	if err != nil || len(candidates) == 0 {
+	if err != nil {
 		return false
 	}
 	now := time.Now()
+	cooling := 0
 	for _, acc := range candidates {
-		if !xsciModelNotFoundCooling(ctx, acc, requestedModel, now) {
-			return false
+		if xsciModelNotFoundCooling(ctx, acc, requestedModel, now) {
+			cooling++
 		}
 	}
-	return true
+	if len(candidates) > 0 && cooling == len(candidates) {
+		return true
+	}
+	if groupID == nil || tried.Other > 0 || (tried.NotFound == 0 && cooling == 0) {
+		return false
+	}
+	return !s.xsciGroupServedModelRecently(ctx, *groupID, requestedModel, now)
 }
 
 func xsciModelNotFoundCooling(ctx context.Context, a *Account, requestedModel string, now time.Time) bool {
@@ -646,4 +726,73 @@ func xsciModelNotFoundCooling(ctx context.Context, a *Account, requestedModel st
 		}
 	}
 	return false
+}
+
+// xsciGroupServedModelRecently reports whether the group served the model in
+// the last xsciModelServedWindow. When it cannot tell (no lookup, query
+// failed) it answers true, which keeps the strict verdict.
+func (s *GatewayService) xsciGroupServedModelRecently(ctx context.Context, groupID int64, model string, now time.Time) bool {
+	lookup, ok := s.usageLogRepo.(XSciModelServedLookup)
+	if !ok {
+		return true
+	}
+	key := strconv.FormatInt(groupID, 10) + "\x00" + model
+	if served, ok := s.xsciServedModels.get(key, now); ok {
+		return served
+	}
+	qctx, cancel := context.WithTimeout(ctx, xsciModelServedTimeout)
+	defer cancel()
+	served, err := lookup.XSciGroupServedModelSince(qctx, groupID, model, now.Add(-xsciModelServedWindow))
+	if err != nil {
+		slog.Warn("xsci_model_served_lookup_failed", "group_id", groupID, "model", model, "error", err)
+		return true
+	}
+	ttl := xsciModelNotServedTTL
+	if served {
+		ttl = xsciModelServedTTL
+	}
+	s.xsciServedModels.put(key, served, now.Add(ttl))
+	return served
+}
+
+// xsciServedModelCache caches the served lookup per group and model. The zero
+// value is ready to use.
+type xsciServedModelCache struct {
+	mu sync.Mutex
+	m  map[string]xsciServedModelEntry
+}
+
+type xsciServedModelEntry struct {
+	served bool
+	until  time.Time
+}
+
+func (c *xsciServedModelCache) get(key string, now time.Time) (bool, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	e, ok := c.m[key]
+	if !ok || !now.Before(e.until) {
+		return false, false
+	}
+	return e.served, true
+}
+
+func (c *xsciServedModelCache) put(key string, served bool, until time.Time) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.m == nil {
+		c.m = map[string]xsciServedModelEntry{}
+	}
+	if len(c.m) >= xsciModelServedCacheLimit {
+		now := time.Now()
+		for k, e := range c.m {
+			if !now.Before(e.until) {
+				delete(c.m, k)
+			}
+		}
+		if len(c.m) >= xsciModelServedCacheLimit {
+			c.m = map[string]xsciServedModelEntry{}
+		}
+	}
+	c.m[key] = xsciServedModelEntry{served: served, until: until}
 }
