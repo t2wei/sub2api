@@ -541,20 +541,12 @@ func (h *AuthHandler) findOAuthIdentityUser(ctx context.Context, identity servic
 		return nil, infraerrors.ServiceUnavailable("PENDING_AUTH_NOT_READY", "pending auth service is not ready")
 	}
 
-	record, err := client.AuthIdentity.Query().
-		Where(
-			authidentity.ProviderTypeEQ(strings.TrimSpace(identity.ProviderType)),
-			authidentity.ProviderKeyEQ(strings.TrimSpace(identity.ProviderKey)),
-			authidentity.ProviderSubjectEQ(strings.TrimSpace(identity.ProviderSubject)),
-		).
-		Only(ctx)
-	if err != nil {
-		if dbent.IsNotFound(err) {
-			return nil, nil
-		}
-		return nil, infraerrors.InternalServer("AUTH_IDENTITY_LOOKUP_FAILED", "failed to inspect auth identity ownership").WithCause(err)
+	// The admin lookup by identity (GET /admin/users/by-identity) shares this query.
+	userID, err := service.FindAuthIdentityOwnerID(ctx, client, identity)
+	if err != nil || userID <= 0 {
+		return nil, err
 	}
-	return findActiveUserByID(ctx, client, record.UserID)
+	return findActiveUserByID(ctx, client, userID)
 }
 
 func (h *AuthHandler) BindLinuxDoOAuthLogin(c *gin.Context) { h.bindPendingOAuthLogin(c, "linuxdo") }

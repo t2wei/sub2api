@@ -218,6 +218,14 @@ export default {
       "label": "为用户创建绑定所选分组的 API 密钥（返回密钥明文）",
       "category": "用户"
     },
+    "users_dstatus_dwrite": {
+      "label": "启用与停用用户（停用后该用户全部 API 密钥立即失效）",
+      "category": "用户"
+    },
+    "users_didentity_dread": {
+      "label": "按 OIDC 登录身份（issuer、subject）查找用户",
+      "category": "用户"
+    },
     "groups_dread": {
       "label": "读取所有分组配置",
       "category": "分组"

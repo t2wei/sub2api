@@ -19,7 +19,7 @@ func TestOIDCGroupsSatisfy(t *testing.T) {
 		"no requirement, no groups":        {nil, nil, true},
 		"empty requirement, any groups":    {[]string{}, []string{"collaborator.basic"}, true},
 		"prefix match":                     {[]string{"staff.*"}, []string{"collaborator.basic", "staff.basic"}, true},
-		"prefix miss":                      {[]string{"staff.*"}, []string{"collaborator.assistant-owner"}, false},
+		"prefix miss":                      {[]string{"staff.*"}, []string{"collaborator.model"}, false},
 		"prefix is literal, not a segment": {[]string{"staff*"}, []string{"staffing.x"}, true},
 		"exact match":                      {[]string{"staff.basic"}, []string{"staff.basic"}, true},
 		"exact is not prefix":              {[]string{"staff.basic"}, []string{"staff.basic-extra"}, false},

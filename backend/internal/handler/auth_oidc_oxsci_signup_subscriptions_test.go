@@ -28,7 +28,7 @@ type oxsciSignupCase struct {
 
 var oxsciSignupCases = []oxsciSignupCase{
 	{"staff", []string{"staff.basic", "staff.dist"}, true},
-	{"collaborator", []string{"collaborator.basic", "collaborator.assistant-owner"}, false},
+	{"collaborator", []string{"collaborator.basic", "collaborator.model"}, false},
 	{"no groups claim", nil, false},
 	{"empty groups", []string{}, false},
 }
