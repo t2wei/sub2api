@@ -26,11 +26,11 @@ func TestOIDCOAuthCallbackRequiredGroups(t *testing.T) {
 		groups   []string
 		allowed  bool
 	}{
-		{"no requirement lets a collaborator in, as before", "", []string{"collaborator.assistant-owner"}, true},
+		{"no requirement lets a collaborator in, as before", "", []string{"collaborator.model"}, true},
 		{"empty list is no requirement", `[]`, []string{"collaborator.basic"}, true},
 		{"prefix lets staff in", `["staff.*"]`, []string{"collaborator.basic", "staff.basic"}, true},
 		{"exact entry lets the named group in", `["staff.basic"]`, []string{"staff.basic"}, true},
-		{"prefix refuses a collaborator", `["staff.*"]`, []string{"collaborator.assistant-owner"}, false},
+		{"prefix refuses a collaborator", `["staff.*"]`, []string{"collaborator.model"}, false},
 		{"requirement refuses a userinfo without groups", `["staff.*"]`, nil, false},
 		{"requirement refuses empty groups", `["staff.*"]`, []string{}, false},
 	} {
@@ -80,7 +80,7 @@ func TestOIDCOAuthCallbackRequiredGroupsAlsoRefusesAnExistingAccount(t *testing.
 		Email:             "required-groups-existing@xsci.com",
 		EmailVerified:     true,
 		InOxSciOrg:        boolPtr(true),
-		Groups:            []string{"collaborator.assistant-owner"},
+		Groups:            []string{"collaborator.model"},
 	})
 	defer cleanup()
 

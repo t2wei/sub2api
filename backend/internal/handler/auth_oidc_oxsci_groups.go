@@ -13,7 +13,7 @@ const oidcStaffGroupPrefix = "staff."
 
 // oidcParseGroups reads the userinfo "groups" claim: the person's groups at the
 // identity provider, as strings. XSci's IdP writes them as
-// "<admission kind>.<capability group>" (staff.basic, collaborator.assistant-owner).
+// "<admission kind>.<capability group>" (staff.basic, collaborator.model).
 // It answers nil when the claim is absent or is not an array, so "no claim" and
 // "an empty list" stay distinguishable; blank and non-string entries are dropped.
 func oidcParseGroups(body string) []string {

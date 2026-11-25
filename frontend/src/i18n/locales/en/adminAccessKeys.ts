@@ -218,6 +218,14 @@ export default {
       "label": "Create user API keys bound to the selected groups (returns the key)",
       "category": "Users"
     },
+    "users_dstatus_dwrite": {
+      "label": "Enable and disable users (disabling stops all of the user's API keys at once)",
+      "category": "Users"
+    },
+    "users_didentity_dread": {
+      "label": "Find users by OIDC login identity (issuer, subject)",
+      "category": "Users"
+    },
     "groups_dread": {
       "label": "Read all group configurations",
       "category": "Groups"
