@@ -278,6 +278,10 @@ export default {
       "label": "Restore subscriptions",
       "category": "Subscriptions"
     },
+    "settings_dsignup_udefaults_dread": {
+      "label": "Read the subscriptions a first sign-in grants new accounts (groups and days)",
+      "category": "Subscriptions"
+    },
     "subscriptions_dreset": {
       "label": "Reset subscription quota",
       "category": "Subscriptions"
