@@ -604,6 +604,8 @@ func registerSettingsRoutes(admin *gin.RouterGroup, h *handler.Handlers, stepUpA
 		// OIDC 登录要求的组
 		adminSettings.GET("/oidc-required-groups", h.Admin.Setting.GetOIDCRequiredGroups)
 		adminSettings.PUT("/oidc-required-groups", h.Admin.Setting.UpdateOIDCRequiredGroups)
+		// [OXSCI] 首次登录建号时自动分配的订阅（只读，按范围授权的密钥可单独获权）
+		adminSettings.GET("/signup-defaults", h.Admin.Setting.GetSignupDefaults)
 		// [OXSCI] 调用日志开关（缺省关）
 		adminSettings.GET("/llm-logging", h.Admin.Setting.GetLLMLoggingSetting)
 		adminSettings.PUT("/llm-logging", h.Admin.Setting.UpdateLLMLoggingSetting)

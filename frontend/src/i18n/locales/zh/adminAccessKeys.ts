@@ -278,6 +278,10 @@ export default {
       "label": "恢复订阅",
       "category": "订阅"
     },
+    "settings_dsignup_udefaults_dread": {
+      "label": "读取首次登录建号时自动分配的订阅（分组与天数）",
+      "category": "订阅"
+    },
     "subscriptions_dreset": {
       "label": "重置订阅额度",
       "category": "订阅"

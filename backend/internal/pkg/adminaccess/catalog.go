@@ -70,6 +70,7 @@ var definitions = []permissionDefinition{
 	{Permission{"subscriptions.extend", "延长订阅有效期", "订阅", "global"}, []string{"POST /subscriptions/:id/extend"}},
 	{Permission{"subscriptions.revoke", "撤销订阅", "订阅", "global"}, []string{"POST /subscriptions/:id/revoke", "DELETE /subscriptions/:id"}},
 	{Permission{"subscriptions.restore", "恢复订阅", "订阅", "global"}, []string{"POST /subscriptions/:id/restore"}},
+	{Permission{"settings.signup_defaults.read", "读取首次登录建号时自动分配的订阅（分组与天数）", "订阅", "global"}, []string{"GET /settings/signup-defaults"}},
 	{Permission{"subscriptions.reset", "重置订阅额度", "订阅", "global"}, []string{"POST /subscriptions/:id/reset-quota"}},
 	{Permission{"announcements.read", "读取所有公告与阅读记录", "内容", "global"}, []string{"GET /announcements", "GET /announcements/:id", "GET /announcements/:id/read-status"}},
 	{Permission{"announcements.write", "创建、发布与修改公告", "内容", "global"}, []string{"POST /announcements", "PUT /announcements/:id"}},
